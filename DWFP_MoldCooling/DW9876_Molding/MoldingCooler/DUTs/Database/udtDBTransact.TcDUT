@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <DUT Name="udtDBTransact" Id="{6465c958-6e63-486a-82b6-a1f8b425e841}">
+    <Declaration><![CDATA[TYPE udtDBTransact :
+STRUCT
+	Start: BOOL;
+	Done: BOOL;
+	ErrorCode: DINT;
+	ErrorMessage : STRING[256];
+	pDatabaseInterface: POINTER TO udtDBInterface;
+	UserID: DINT;
+	TransactionID: INT;
+	DataLength: DINT;
+	DataOutLength: DINT;
+	DataIn: ARRAY[0..1999] OF BYTE;
+	DataOut: ARRAY[0..1999] OF BYTE;
+	State: DINT;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

@@ -1,0 +1,109 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <POU Name="FB_PID" Id="{9948b47d-b616-4fdc-9dcf-d79a24cdad0b}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_PID
+(*Simple PID Controller*)
+
+VAR_INPUT
+	fSetpoint: LREAL; (*setpoint value*)
+	fProcessVariable: LREAL; (*actual value*)
+	fKp: LREAL; (*proportional gain-Kp*)
+	fKi: LREAL; (*integral gain-Ki*)
+	fKd: LREAL; (*derivative gain-Kd*)
+	fCycleTime: LREAL; (*controller cycle time in seconds(s)*)
+	fMaxOutput: LREAL; (*maximum output command*)
+	fMinOutput: LREAL; (*minimum output command*)
+	bReset: BOOL; (*reset flag*)
+END_VAR
+
+VAR_OUTPUT
+	fOutput: LREAL; (*controller output command*)
+END_VAR
+
+VAR
+	Error: LREAL := 0; (*error between setpoint and process variable*)
+	Integral: LREAL := 0; (*accumulated error*)
+	Derivative: LREAL := 0; (*error rate of change*)
+	LastError: LREAL := 0; (*error on last execution*)
+	CycleCount: INT := 0; (*execution cycle count*)
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[(*Reset PID calculations when requested*)
+IF bReset THEN
+	Error := 0;
+	Integral := 0;
+	Derivative := 0;
+	LastError := 0;
+END_IF
+
+(*Calculate the error between the setpoint and the process variable*)
+Error := fSetpoint - fProcessVariable;
+
+(*Only allow integral component to contibute to the controller output when the error is fairly small. 
+  This is done to prevent severe overshoot on startup due to the nature of temperature control with
+  a single output (heat, but no cooling).*)
+IF ABS(Error) < 10 THEN
+	(*Calculate accumulated error scaled to controller cycle time*)
+	Integral := Integral + (Error * fCycleTime);
+ELSE
+	Integral := 0;
+END_IF
+
+(*Calculate the error rate of change*)
+Derivative := (Error - LastError)/fCycleTime;
+
+(*Calculate the controller output command*)
+fOutput := (fKp * Error) + (fKi * Integral) + (fKd * Derivative);
+
+IF fOutput > fMaxOutput THEN
+	fOutput := fMaxOutput;
+END_IF
+IF fOutput < fMinOutput THEN
+	fOutput := fMinOutput;
+END_IF
+
+(*Store the current error for the next cycle*)
+LastError := Error;
+
+(*Reset controller components every 30 cycles in order to prevent integral component from running away.
+  This is done to prevent severe overshoot due to the nature of temperature control with
+  a single output (heat, but no cooling).*)
+CycleCount := CycleCount + 1;
+IF CycleCount >= 30 THEN
+	Error := 0;
+	Integral := 0;
+	Derivative := 0;
+	LastError := 0;
+	CycleCount := 0;
+END_IF]]></ST>
+    </Implementation>
+    <LineIds Name="FB_PID">
+      <LineId Id="83" Count="0" />
+      <LineId Id="77" Count="0" />
+      <LineId Id="79" Count="2" />
+      <LineId Id="78" Count="0" />
+      <LineId Id="82" Count="0" />
+      <LineId Id="76" Count="0" />
+      <LineId Id="62" Count="1" />
+      <LineId Id="175" Count="2" />
+      <LineId Id="135" Count="0" />
+      <LineId Id="84" Count="0" />
+      <LineId Id="61" Count="0" />
+      <LineId Id="137" Count="1" />
+      <LineId Id="136" Count="0" />
+      <LineId Id="65" Count="6" />
+      <LineId Id="86" Count="2" />
+      <LineId Id="92" Count="2" />
+      <LineId Id="90" Count="0" />
+      <LineId Id="72" Count="1" />
+      <LineId Id="140" Count="0" />
+      <LineId Id="178" Count="2" />
+      <LineId Id="141" Count="2" />
+      <LineId Id="146" Count="2" />
+      <LineId Id="145" Count="0" />
+      <LineId Id="144" Count="0" />
+      <LineId Id="9" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

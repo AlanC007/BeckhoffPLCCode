@@ -1,0 +1,19 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <DUT Name="udtYaskawaVFDStatus" Id="{18d07568-646e-4ef4-984b-00263b72f962}">
+    <Declaration><![CDATA[TYPE udtYaskawaVFDStatus :
+STRUCT
+Running :BOOL;	
+ZeroSpeed :BOOL;
+RunningFWD :BOOL;
+SpeedAgree :BOOL;
+Ready :BOOL;
+Alarm :BOOL;
+Faulted :BOOL;
+OpError :BOOL;
+PowerLoss:BOOL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

@@ -1,0 +1,61 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4022.7">
+  <GVL Name="Globals" Id="{60a7955b-bbf5-482e-bcba-811e3988621e}">
+    <Declaration><![CDATA[{attribute 'Tc2GvlVarNames'}
+{attribute 'qualified_only'}
+VAR_GLOBAL
+	(*Wired Inputs for Station Control*)
+	iCycleStart AT %I* :BOOL;
+	iCycleStop AT %I* :BOOL;
+	
+	gDatabaseInterface: udtDBInterface;
+	gInitialScanForce: BOOL:=0;
+	gFirstScan: BOOL:=0;
+	gTimeZoneOffsetFromUTC: DINT;
+	gCurrentTime: timestamp;
+	gSoftwareRevision : STRING;
+	gDbTransact :ARRAY[0..1] OF udtIWS_DataLogItems;
+	
+	(*Create the Hourly Containers*)
+	gCurrShift :DINT;
+	gLastShift :DINT;
+	gCurrentHour :DINT;
+	gLastHour : DINT;
+	gTargetRatePerHour : DINT;
+	gTargetRatePerMin : DINT;
+	gRejectRate : REAL;
+	gHourlyData: ARRAY[0..23] OF udtHourlyData;
+	gShiftdata :ARRAY[0..3] OF udtHourlyData;
+	gCurrOeeLogTime :TIME := T#300000MS;
+	
+
+	(*Station 100*)
+	gStation100: Station;
+	gStn100_02_Stats : Component_Stats;
+	gStn100_StateTraceBuffer : TraceFIFOBuffer;
+	gStn100_StateTraceFifo : FIFO_StateTrace := ( Overwrite := TRUE );
+	gStn100_HMIMessageBuffer : HMIMessageBuffer;
+	gStn100_HMIMessageFIFO : FIFO_HMIMessage := (Overwrite := TRUE);
+	gStn100_10_Main : udtCmpBaseMain;
+	gStn100_20_CoolingConveyor : udtCmpVFD;
+	gStn100_30_VibratoryConveyor : udtCmpVFD;
+	gStn100_40_Vibrator : udtCmpVFD;
+	gStn100FaultedNotAck: BOOL;	
+	
+	(* Ethernet IP Inputs from Weigh Scale *)
+		gWeighRightInputs AT %I* : INT;
+		gWeighRightCurrentRecipeID AT %I* :INT;
+
+END_VAR
+
+VAR_GLOBAL PERSISTENT
+	gCurrProduct : udtRecipe;
+END_VAR
+
+VAR_GLOBAL CONSTANT
+	strNull : STRING :='';
+	cStats: StatsConstants;
+	gstLibVersion : ST_LibVersion;
+END_VAR]]></Declaration>
+  </GVL>
+</TcPlcObject>

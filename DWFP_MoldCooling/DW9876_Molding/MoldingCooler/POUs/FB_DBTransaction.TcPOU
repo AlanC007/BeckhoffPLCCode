@@ -1,0 +1,140 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <POU Name="FB_DBTransaction" Id="{26213b24-aee3-4164-848b-4d46ad126ba3}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_DBTransaction
+
+VAR_INPUT
+	pDBTransact: POINTER TO udtDBTransact;
+END_VAR
+
+VAR_OUTPUT
+	ErrorCode: DINT;
+	ErrorMessage : STRING[256];
+END_VAR
+
+VAR
+	NextState: DINT;
+	FirstEntry: BOOL;
+	tmrState: TON;
+	idx: DINT;
+	ChannelNum:SINT;
+	TriggerMask:DWORD;
+
+	Time1: TimeStamp;
+	Time2: TimeStamp;
+	Time3: TimeStamp;
+	Time4: TimeStamp;
+
+	StateTraceBuffer : TraceFIFOBuffer;
+	StateTraceFifo : FIFO_StateTrace := ( Overwrite := TRUE );
+	StateTimeStamp : StateTimeStamp;
+	pStateTraceBuffer: POINTER TO TraceFIFOBuffer;
+
+	Temp: DINT;
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[pStateTraceBuffer := ADR(StateTraceBuffer);
+
+IF FirstEntry THEN
+	tmrState(IN:=FALSE);
+END_IF
+
+IF pDBTransact^.UserID = 2 THEN
+	Temp := pDBTransact^.UserID;
+END_IF
+
+
+CASE pDBTransact^.State OF
+
+0:	(*Idle*)
+	IF pDBTransact^.Start THEN
+		pDBTransact^.State := 10;
+		ErrorCode := 0;
+		ErrorMessage :='';
+		Time1:=F_GetTimeStamp();
+	END_IF
+
+10:
+	FOR idx := 0 TO 19 DO
+		IF pDBTransact^.pDatabaseInterface^.Connection[idx].CurrentUser = 0 OR
+				pDBTransact^.pDatabaseInterface^.Connection[idx].CurrentUser = pDBTransact^.UserID THEN
+			pDBTransact^.pDatabaseInterface^.Connection[idx].CurrentUser := pDBTransact^.UserID;
+			ChannelNum := DINT_TO_SINT(idx);
+			TriggerMask := REAL_TO_DWORD(EXPT(2,ChannelNum));
+			pDBTransact^.State := 20;
+			EXIT;
+		END_IF
+	END_FOR
+	Time2:=F_GetTimeStamp();
+
+20: (*Trigger Database*)
+	MEMSET(ADR(pDBTransact^.DataOUT[0]),0,SIZEOF(pDBTransact^.DataOut));
+	MEMCPY(ADR(pDBTransact^.pDatabaseInterface^.Connection[ChannelNum].DataIn[0]),
+			ADR(pDBTransact^.TransactionID),
+			SIZEOF(pDBTransact^.TransactionID));
+	MEMCPY(ADR(pDBTransact^.pDatabaseInterface^.Connection[ChannelNum].DataIn[0+SIZEOF(pDBTransact^.TransactionID)]),
+			ADR(pDBTransact^.DataIn[0]),
+			pDBTransact^.DataLength);
+	pDBTransact^.pDatabaseInterface^.Trigger := SETBIT32(pDBTransact^.pDatabaseInterface^.Trigger ,ChannelNum);
+	Time3:=F_GetTimeStamp();
+	pDBTransact^.State := 25;
+
+25:
+	IF (pDBTransact^.pDatabaseInterface^.Response AND TriggerMask) > 0 THEN
+		MEMCPY(ADR(pDBTransact^.DataOUT[0]),
+				ADR(pDBTransact^.pDatabaseInterface^.Connection[ChannelNum].DataOut[0+SIZEOF(pDBTransact^.TransactionID)]),
+				pDBTransact^.DataLength);
+		ErrorCode :=pDBTransact^.pDatabaseInterface^.Connection[ChannelNum].ErrorCode;
+		ErrorMessage :=pDBTransact^.pDatabaseInterface^.Connection[ChannelNum].ErrorMessage;
+		pDBTransact^.pDatabaseInterface^.Trigger :=CLEARBIT32(pDBTransact^.pDatabaseInterface^.Trigger,ChannelNum);
+		pDBTransact^.State := 30;
+	END_IF
+	IF NOT pDBTransact^.Start THEN
+		pDBTransact^.State := 40; (*if fault for timeout, need way out of state 25*)
+		pDBTransact^.pDatabaseInterface^.Trigger :=CLEARBIT32(pDBTransact^.pDatabaseInterface^.Trigger,ChannelNum);
+	END_IF
+
+30:
+	IF (pDBTransact^.pDatabaseInterface^.Response AND TriggerMask) = 0 THEN
+		pDBTransact^.Done := TRUE;
+		pDBTransact^.ErrorCode := ErrorCode;
+		pDBTransact^.ErrorMessage := ErrorMessage;
+		pDBTransact^.State := 40;
+		Time4:=F_GetTimeStamp();
+	END_IF
+
+40:
+	IF NOT pDBTransact^.Start THEN
+		pDBTransact^.Done := FALSE;
+		pDBTransact^.pDatabaseInterface^.Connection[ChannelNum].CurrentUser := 0;
+		MEMSET(ADR(pDBTransact^.pDatabaseInterface^.Connection[ChannelNum].DataOut[0]),0,SIZEOF(pDBTransact^.pDatabaseInterface^.Connection[ChannelNum].DataOut));
+		pDBTransact^.State := 0;
+	END_IF
+
+END_CASE
+
+IF NextState <> pDBTransact^.state THEN
+	FirstEntry := TRUE;
+	NextState:= pDBTransact^.State;
+	Time1 := F_GetTimeStamp();
+	StateTimeStamp.ID := ChannelNum;
+	StateTimeStamp.State := pDBTransact^.State;
+	StateTimeStamp.TimeHi := Time1.CurrentValue.dwHighPart;
+	StateTimeStamp.TimeLo:= Time1.CurrentValue.dwLowPart;
+	StateTraceFifo.INSERT(pFIFO := pStateTraceBuffer, in := StateTimeStamp);
+ELSE
+	FirstEntry := FALSE;
+END_IF]]></ST>
+    </Implementation>
+    <LineIds Name="FB_DBTransaction">
+      <LineId Id="3" Count="0" />
+      <LineId Id="5" Count="19" />
+      <LineId Id="26" Count="12" />
+      <LineId Id="40" Count="26" />
+      <LineId Id="68" Count="8" />
+      <LineId Id="78" Count="20" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

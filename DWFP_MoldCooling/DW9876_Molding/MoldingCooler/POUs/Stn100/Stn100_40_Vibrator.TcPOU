@@ -1,0 +1,407 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <POU Name="Stn100_40_Vibrator" Id="{b0bb776f-c8ce-4af8-906a-91e0d49da835}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM Stn100_40_Vibrator
+VAR CONSTANT
+	cDriveFullSpeedEU: INT := 6000; (*Hz x 100 : 0 to 138 fpm*)
+END_VAR 
+
+VAR PERSISTENT
+	DriveCommand: udtYaskawaVFDCmd;
+	hiSpeedPercentage: REAL; (*16 to 100%*)
+END_VAR
+
+VAR
+	pCmp: POINTER TO udtCmpVFD;
+	pStation: POINTER TO Station;
+	Local: FrameworkLocal;
+	Framework: FB_Framework;
+	
+	DriveStatus: udtYaskawaVFDStatus;	
+	DriveRun: BOOL;	
+	SpeedCmd: REAL;
+	SpeedFbk: REAL;
+	tmrCycleAuto: TON;
+	tmrSpeedChange: TON;
+	tmrDriveStopOffDelay: TON;
+	tmrDriveStart: TON;
+	tmrDriveStop: TON;
+	tmrDriveClearFaults: TON;
+	JogSpeed :INT :=2000;
+	
+
+	(*Inputs*)
+	iStatus AT %I* : INT;
+	iCurrentVelocity AT %I* : INT;
+	
+	(*Outputs*)
+	oCommand AT %Q* : INT;
+	oSpeedReference AT %Q* : INT;
+	
+	(*Operator Inputs*)
+	hiDriveClearFaults: BOOL;
+	hiDriveRunFwd: BOOL;
+	hiDriveRunRev: BOOL;
+	hiDriveStart: BOOL;
+	hiDriveStop: BOOL;
+	hiDriveJog: BOOL;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF Globals.gFirstScan THEN
+	pCmp := ADR(Globals.gStn100_40_Vibrator);
+	pStation := ADR(Globals.gStation100);
+	(*Address your components here that are owned by this Main*)
+	Local.Name :=pCmp^.Framework.ComponentIDRecord.Name;
+	Local.pStateTraceBuffer := ADR(Globals.gStn100_StateTraceBuffer);
+	Local.pStateTraceFifo := ADR(Globals.gStn100_StateTraceFifo);
+	Local.pStats := ADR(Globals.gStn100_02_Stats);
+	Local.FaultTimeLong := T#10000MS;
+	Local.FaultTimeShort := T#5000MS;
+	
+	DefineMessages();
+END_IF
+
+FrameWork(pFramework := ADR(pCmp^.Framework), 
+		  pLocal := ADR(Local), 
+		  pStation := pStation);
+
+(*House Keeping*)
+DriveStatus.Running := iStatus.0;
+DriveStatus.ZeroSpeed := iStatus.1;
+DriveStatus.RunningFWD := iStatus.2;
+DriveStatus.SpeedAgree := iStatus.4;
+DriveStatus.Ready := iStatus.5;
+DriveStatus.Alarm := iStatus.6;
+DriveStatus.Faulted := iStatus.7;
+DriveStatus.OpError := iStatus.8;
+DriveStatus.PowerLoss := iStatus.9;
+
+oCommand.0 := DriveCommand.RunFwd;
+oCommand.1 := DriveCommand.RunRev;
+oCommand.3 := DriveCommand.ClearFaults;
+
+(*If the station is in auto, set the drive speed to the operator requested percentage of the base speed reference.
+  If the station is in manual, set the drive speed to the operator requested percentage of max speed.*)
+(*NOTE: This conveyor's speed will not change with the base speed reference*)  
+IF Local.CycleAuto THEN
+	SpeedCmd := hiSpeedPercentage;
+ELSIF pStation^.OKForManual THEN
+	SpeedCmd := hiSpeedPercentage;
+END_IF
+
+(*Calculate drive speed command in engineering units from percentage*)
+IF SpeedCmd < 5 THEN
+	SpeedCmd := 5;
+ELSIF SpeedCmd > 100 THEN
+	SpeedCmd := 100;
+END_IF
+
+IF NOT pStation^.OKForManual AND NOT Local.CycleManual AND NOT pStation^.CycleManual THEN
+	oSpeedReference := REAL_TO_INT((SpeedCmd / 100)*cDriveFullSpeedEU);
+END_IF
+
+
+(*Convert drive speed feedback from engineering units to percentage for display on the HMI*)
+SpeedFbk := (INT_TO_REAL(iCurrentVelocity) / INT_TO_REAL(cDriveFullSpeedEU))*100;
+
+(*Delay Off timer for the drive stop signal.
+  This is required to insure that the drive start signal is not set prior to the drive seeing the drive stop signal go low.*)
+tmrDriveStopOffDelay(IN := NOT DriveCommand.RunFwd, PT := T#100MS);  
+
+(*Start the drive*)
+tmrDriveStart(IN := DriveRun AND tmrDriveStopOffDelay.Q, PT := T#2000MS);
+IF DriveRun AND tmrDriveStopOffDelay.Q AND NOT tmrDriveStart.Q THEN
+	DriveCommand.RunFwd := 1;
+END_IF
+
+(*Stop the drive on an emergency stop*)
+IF pStation^.EmergencyStop THEN
+	DriveRun := 0;
+	DriveCommand.RunFwd := 0;
+	DriveCommand.RunRev := 0;	
+END_IF
+
+(*Stop the drive*)
+tmrDriveStop(IN := NOT DriveRun, PT := T#500MS);
+IF NOT DriveRun AND (NOT tmrDriveStop.Q OR (NOT hiDriveRunFwd AND DriveStatus.Running)) THEN
+	DriveCommand.RunFwd := 0;
+	DriveCommand.RunRev := 0;
+END_IF
+
+(**********************
+    Sequence logic
+***********************)
+CASE Local.State OF
+
+0: (*Wait for run request*)
+	Local.OKToStop := TRUE;
+	
+	IF pCmp^.RunReq THEN
+		Local.NextState := 10;
+	END_IF
+
+10: (*Run drive and wait for it to get up to speed*)
+	IF Local.FirstEntry THEN
+		DriveRun := 1;
+	END_IF
+	
+	IF iCurrentVelocity > (oSpeedReference * 0.9) THEN
+		Local.NextState := 20;
+	END_IF
+
+20: (*Run drive while requested*)
+	IF Local.FirstEntry THEN
+		pCmp^.Running := 1;
+	END_IF
+	
+	Local.OKToStop := TRUE;
+	tmrSpeedChange(IN := (iCurrentVelocity < (oSpeedReference * 0.9)) 
+					OR (iCurrentVelocity > (oSpeedReference * 1.1)), PT := T#2000MS);
+	IF NOT pCmp^.RunReq THEN
+		Local.NextState := 30;
+	ELSIF tmrSpeedChange.Q THEN
+		Local.NextState := 21;
+	END_IF
+
+	IF Local.NextState <> Local.State THEN
+		pCmp^.Running := 0;
+	END_IF
+
+21: (*Speed Reference Fault*)
+	Local.FaultNumber := 1;	
+	
+30: (*Stop drive and verify it stopped*)
+	IF Local.FirstEntry THEN
+		DriveRun := 0;
+	END_IF
+
+	IF NOT DriveStatus.Running THEN
+		Local.NextState := 0;
+	END_IF	
+
+(**********************
+    Idle and Reset logic
+***********************)
+5000: (*Idle*)
+	IF Local.FirstEntry THEN
+		DriveRun := 0;
+		DriveCommand.RunFwd := 0;
+		DriveCommand.RunRev := 0;
+		DriveCommand.ClearFaults := 0;
+		pCmp^.Running := 0;
+		Local.ReEntryState := 0;
+		pCmp^.Framework.ResetDone := FALSE;
+		Local.ManualCycleDone := FALSE;
+		(*If this component owns components, reset the ResetStart flags here*)
+	END_IF
+	
+	Local.OKToStop := TRUE;
+	IF NOT Local.AsynchFault OR Local.AsynchFaultReactionComplete THEN
+		IF Local.CycleAuto AND NOT Local.CycleReset AND NOT Local.CycleManual THEN
+			Local.NextState := Local.ReEntryState;
+		ELSIF Local.CycleReset AND pCmp^.Framework.ResetStart AND NOT Local.CycleAuto AND NOT Local.CycleManual THEN
+			IF pStation^.FullInitRequired OR pCmp^.Framework.FullInitRequired THEN
+				Local.NextState := 5010;
+			ELSIF NOT pStation^.FullInitRequired AND NOT pCmp^.Framework.FullInitRequired THEN
+				IF NOT Local.AsynchFault THEN
+					Local.NextState := 6000;
+				ELSIF Local.AsynchFault THEN
+					Local.NextState := 7500;
+				END_IF
+			END_IF
+		ELSIF Local.CycleManual AND NOT Local.CycleAuto AND NOT Local.CycleReset THEN
+			Local.NextState := 8000;
+		END_IF
+	ELSIF Local.AsynchFault AND NOT Local.AsynchFaultReactionComplete THEN
+		Local.NextState := 7000;
+	END_IF
+
+5010: (*Full Initialization*)
+	IF Local.FirstEntry THEN
+		DriveRun := 0;
+	END_IF
+	
+	Local.NextState := 5020;
+
+5020: (*Reset drive*)
+	IF Local.FirstEntry THEN
+		DriveCommand.ClearFaults := 1;
+	END_IF
+	
+	IF DriveStatus.Ready AND NOT DriveStatus.Faulted AND NOT DriveStatus.Running THEN
+		Local.NextState := 9000;
+	END_IF
+
+6000: (*Fault Reset - Check faulted state*)
+	Local.NextState := 5010;
+
+7000: (*Asynch Fault Reaction*)
+	Local.NextState := 7499;
+
+7499: (*Asynch fault reaction complete*)
+	IF Local.FirstEntry THEN
+		Local.AsynchFaultReactionComplete := TRUE;
+	END_IF
+	
+	Local.NextState := 5000;
+
+7500: (*Asynch Fault recovery*)
+	Local.NextState := 5010;
+
+8000: (*Manual Cycle Request*)
+	Local.NextState := 9999;
+
+9000: (*Reset*)
+	(*On Entry Code*)
+	IF Local.FirstEntry THEN
+		Local.NextState := 9998;
+	END_IF
+	
+	Local.OKToStop := TRUE;
+	(*Transition Code*)
+	IF TRUE THEN
+		Local.NextState := 9998;
+	END_IF
+	
+	(*On Exit Code*)
+	IF Local.State <> Local.NextState THEN
+		(*Place Holder*)
+	END_IF
+
+9998: (*Reset Done*)
+	IF Local.FirstEntry THEN
+		pCmp^.Framework.FullInitRequired := FALSE;
+		Local.FaultedState := 0;
+		Local.AsynchFault := FALSE;
+		Local.AsynchFaultReactionComplete := FALSE;
+		pCmp^.Framework.ResetDone := TRUE;
+	END_IF
+	
+	Local.OKToStop := TRUE;
+
+9999: (*Manual cycle done*)
+	IF Local.FirstEntry THEN
+		Local.ManualCycleDone := TRUE;
+	END_IF
+		
+END_CASE
+(**********************
+  END of Sequence logic
+***********************)
+
+(*Fault Logic*)
+IF Local.tmrFault.Q AND Local.FaultNumber=0 THEN
+	Local.FaultNumber := 1; (*Default fault number is 1*)
+	(*Add custom fault numbers based on state as needed*)
+END_IF
+(*Asynchronous, state-independent faults (e.g., EmergencyStop) are trapped here.*)
+tmrCycleAuto(IN := Local.CycleAuto, PT := T#2000MS);
+IF NOT Local.AsynchFault AND tmrCycleAuto.Q THEN
+	IF NOT DriveStatus.Ready OR DriveStatus.Faulted THEN
+		Local.FaultNumber := 1;
+		Local.AsynchFault := 1;
+	END_IF
+	IF DriveStatus.RunningFwd THEN
+		Local.FaultNumber := 2;
+		Local.AsynchFault := 1;
+	END_IF
+END_IF
+IF Local.LongFaultState THEN
+	Local.FaultTimePreset := Local.FaultTimeLong;
+ELSE
+	Local.FaultTimePreset := Local.FaultTimeShort;
+END_IF
+Local.LongFaultState := FALSE; 
+
+(*Manual Logic*)
+IF pStation^.OKForManual AND NOT Local.CycleManual AND NOT pStation^.CycleManual THEN
+
+	IF hiDriveClearFaults THEN
+		DriveCommand.ClearFaults := 1;
+	END_IF
+	IF hiDriveRunFwd THEN
+		oSpeedReference := 	JogSpeed;
+		DriveCommand.RunFwd := 1;
+		DriveCommand.RunRev := 0;
+	END_IF
+	IF hiDriveRunRev THEN
+		oSpeedReference := 	JogSpeed;
+		DriveCommand.RunRev := 1;
+		DriveCommand.RunFwd := 0;
+	END_IF	
+  	IF hiDriveStart THEN
+		oSpeedReference := REAL_TO_INT((SpeedCmd / 100)*cDriveFullSpeedEU);
+		DriveRun := 1;
+	END_IF
+	IF hiDriveStop THEN
+		DriveRun := 0;
+	END_IF
+	
+	tmrDriveClearFaults(IN := DriveCommand.ClearFaults, PT := T#1000MS);
+	IF tmrDriveClearFaults.Q THEN
+		DriveCommand.ClearFaults :=0;
+	END_IF
+END_IF
+
+(*Reset all manual bits*)
+hiDriveClearFaults := FALSE;
+hiDriveRunFwd := FALSE;
+hiDriveRunRev := FALSE;
+hiDriveStart := FALSE;
+hiDriveStop := FALSE;]]></ST>
+    </Implementation>
+    <Action Name="DefineMessages" Id="{bc479939-07a6-430b-9237-7066f5c95ff5}">
+      <Implementation>
+        <ST><![CDATA[(*Define your Message Structure Here*)
+Local.MsgArray[0].Id := 1;
+Local.MsgArray[0].Text := 'Drive faulted';
+Local.MsgArray[0].AltText := 'No Alt Text';
+Local.MsgArray[1].Id := 2;
+Local.MsgArray[1].Text := 'Drive incorrect direction';
+Local.MsgArray[1].AltText := 'No Alt Text';
+Local.MsgArray[2].Id := 101;
+Local.MsgArray[2].Text := 'Drive did not start';
+Local.MsgArray[2].AltText := 'No Alt Text';
+Local.MsgArray[3].Id := 211;
+Local.MsgArray[3].Text := 'Drive not at commanded speed';
+Local.MsgArray[3].AltText := 'No Alt Text';
+Local.MsgArray[4].Id := 301;
+Local.MsgArray[4].Text := 'Drive did not stop';
+Local.MsgArray[4].AltText := 'No Alt Text';
+Local.MsgArray[5].Id := 50201;
+Local.MsgArray[5].Text := 'Drive did not reset';
+Local.MsgArray[5].AltText := 'No Alt Text';]]></ST>
+      </Implementation>
+    </Action>
+    <LineIds Name="Stn100_40_Vibrator">
+      <LineId Id="3" Count="1" />
+      <LineId Id="6" Count="6" />
+      <LineId Id="888" Count="1" />
+      <LineId Id="234" Count="0" />
+      <LineId Id="15" Count="0" />
+      <LineId Id="22" Count="0" />
+      <LineId Id="1142" Count="1" />
+      <LineId Id="607" Count="1" />
+      <LineId Id="1229" Count="28" />
+      <LineId Id="1515" Count="3" />
+      <LineId Id="1258" Count="4" />
+      <LineId Id="1269" Count="8" />
+      <LineId Id="1280" Count="13" />
+      <LineId Id="1297" Count="187" />
+      <LineId Id="1521" Count="0" />
+      <LineId Id="1485" Count="3" />
+      <LineId Id="1522" Count="0" />
+      <LineId Id="1489" Count="3" />
+      <LineId Id="1523" Count="0" />
+      <LineId Id="1493" Count="3" />
+      <LineId Id="1524" Count="0" />
+      <LineId Id="1497" Count="17" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
+    <LineIds Name="Stn100_40_Vibrator.DefineMessages">
+      <LineId Id="37" Count="0" />
+      <LineId Id="11" Count="16" />
+      <LineId Id="1" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

@@ -1,0 +1,249 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <POU Name="GlobalLogic" Id="{8957e7f1-902b-4aa3-994f-db99dab70a89}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM GlobalLogic
+VAR
+	(*Create the Objects for Data Collection of Rates*)
+	hiHourDataLogReq :BOOL :=0;
+	hoHourDataLogAck :BOOL :=0;	
+	hiShiftDataLogReq :BOOL :=0;
+	hoShiftDataLogAck :BOOL :=0;
+	hiCurrOeeLogReq  :BOOL :=0;
+	hoCurrOeeLogAck  :BOOL :=0;	
+	hiShiftOeeLogReq  :BOOL :=0;
+	hoShiftOeeLogAck  :BOOL :=0;		
+
+	State :DINT :=0;
+	NextState :DINT :=0;
+	FirstEntry: BOOL;
+	tmrState: TON;	
+	tmrState20 :TON;
+	tmrState40 :TON;
+	tmrState50 :TON;
+	tmrState70 :TON;
+	tmrState80 :TON;
+	tmrState100 :TON;
+	tmrState110 :TON;
+	tmrCurrOeeLog :TON;	
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF Globals.gFirstScan THEN
+	tmrCurrOeeLog(in:=TRUE,pt:=Globals.gCurrOeeLogTime);
+END_IF
+
+(*Set HMI Flags for the Requested Data Log Event*)
+IF (Globals.gCurrShift <> Globals.gLastShift) THEN
+	hiShiftDataLogReq :=TRUE;	
+END_IF
+
+IF (Globals.gCurrentHour <> Globals.gLastHour) THEN
+	hiHourDataLogReq :=TRUE;	
+END_IF
+tmrCurrOeeLog(in:=TRUE);
+IF (tmrCurrOeeLog.Q) THEN	
+	hiCurrOeeLogReq :=TRUE;
+END_IF
+
+IF NextState <> State THEN
+	(*code: Log state change into buffer*)
+	FirstEntry := TRUE;
+	State := NextState;
+ELSE
+	FirstEntry := FALSE;
+END_IF
+
+IF FirstEntry THEN
+	tmrState(IN:=FALSE);
+	tmrState20(IN:=FALSE);
+	tmrState40(IN:=FALSE);
+	tmrState50(IN:=FALSE);
+	tmrState70(IN:=FALSE);
+	tmrState80(IN:=FALSE);	
+	tmrState100(IN:=FALSE);
+	tmrState110(IN:=FALSE);	
+END_IF
+
+CASE State OF
+	
+0:	(*Check If we have any Data logging Requests *)
+		IF (hiHourDataLogReq)OR(Globals.gDbTransact[0].HourlyTranReq AND Globals.gDbTransact[0].HourlyTranCmp) THEN
+			Globals.gDbTransact[0].HourlyTranReq := TRUE;
+			NextState:=10;
+		END_IF
+		IF (hiShiftDataLogReq)OR (Globals.gDbTransact[0].ShiftOeeTranReq AND Globals.gDbTransact[0].ShiftOeeTranCmp) THEN
+			Globals.gDbTransact[0].ShiftOeeTranReq := TRUE;
+			NextState:=40;
+		END_IF	
+		IF (hiCurrOeeLogReq) THEN
+			Globals.gDbTransact[0].CurrOeeTranReq := TRUE;
+			NextState:=70;
+		END_IF
+(*		IF (hiShiftOeeLogReq) THEN
+			Globals.gDbTransact[0].ShiftOeeTranReq := TRUE;			
+			NextState:=100;
+		END_IF *)
+
+10:	(*Wait for confirmation from HMI For Hourly data Logging*)
+
+	tmrState(IN:=TRUE, PT:=T#3.0S);
+	hoHourDataLogAck := (Globals.gDbTransact[0].HourlyTranReq AND Globals.gDbTransact[0].HourlyTranCmp);
+	IF hoHourDataLogAck THEN
+		NextState:=20;
+		Globals.gDbTransact[0].HourlyTranReq := FALSE;
+		Globals.gDbTransact[0].HourlyTranCmp := FALSE;
+	END_IF
+	IF  tmrState.Q THEN
+		hiHourDataLogReq := FALSE;
+		hoHourDataLogAck := FALSE;
+		Globals.gDbTransact[0].HourlyTranReq := FALSE;
+		Globals.gDbTransact[0].HourlyTranCmp := FALSE;
+		NextState:=0;
+	END_IF
+
+20:	(*Clear Hour DataLogging Events*)
+	hoHourDataLogAck := (Globals.gDbTransact[0].HourlyTranReq AND Globals.gDbTransact[0].HourlyTranCmp);
+	tmrState20(IN:=TRUE, PT:=T#3.0S);
+	IF NOT hoHourDataLogAck AND NOT tmrState.Q THEN
+		Globals.gLastHour := Globals.gCurrentHour ;
+		Globals.gHourlyData[Globals.gCurrentHour].GoodCount :=0;
+		Globals.gHourlyData[Globals.gCurrentHour].ScrapCount :=0;
+		NextState:=0;		
+	END_IF
+	IF  tmrState20.Q THEN
+		hiHourDataLogReq := TRUE;
+		hoHourDataLogAck := FALSE;
+		NextState:=0;
+	END_IF
+	
+40:	(*Wait for confirmation from HMI For Shift data Logging*)
+	hoShiftDataLogAck :=(Globals.gDbTransact[0].ShiftOeeTranReq AND Globals.gDbTransact[0].ShiftOeeTranCmp);
+	tmrState40(IN:=TRUE, PT:=T#3.0S);
+	IF hoShiftDataLogAck THEN
+		NextState:=50;
+		Globals.gDbTransact[0].ShiftOeeTranReq := FALSE;
+		Globals.gDbTransact[0].ShiftOeeTranCmp := FALSE;
+	END_IF
+	IF  tmrState40.Q THEN
+		hiShiftDataLogReq := FALSE;
+		hoShiftDataLogAck := FALSE;
+		NextState:=0;
+	END_IF
+
+50:	(*Clear Shift data Logging Event*)
+	hoShiftDataLogAck :=(Globals.gDbTransact[0].ShiftOeeTranReq AND Globals.gDbTransact[0].ShiftOeeTranCmp);
+	tmrState50(IN:=TRUE, PT:=T#3.0S);
+	IF NOT hoHourDataLogAck THEN
+		Globals.gLastShift := Globals.gCurrShift;
+		(*Globals.gShiftData[Globals.gCurrShift].GoodCount :=0;
+		Globals.gShiftData[Globals.gCurrShift].ScrapCount :=0;
+		MEMSET(ADR(Stn100_02_Stats.DBShiftOeeRecord),0,SIZEOF(Stn100_02_Stats.DBShiftOeeRecord)); *)
+		hiShiftOeeLogReq :=FALSE;			
+		NextState:=0;	
+	END_IF
+	IF  tmrState50.Q THEN
+		hiShiftDataLogReq := TRUE;
+		hoShiftDataLogAck := FALSE;
+		NextState:=0;
+	END_IF	
+
+70:	(*Wait for confirmation from HMI For Current OEE Data Logging*)
+	hoCurrOeeLogAck :=(Globals.gDbTransact[0].CurrOeeTranReq AND Globals.gDbTransact[0].CurrOeeTranCmp);
+	tmrState70(IN:=TRUE, PT:=T#3.0S);
+	IF hoCurrOeeLogAck OR tmrState70.Q THEN
+		NextState:=80;
+		tmrCurrOeeLog(IN:=FALSE);
+		Globals.gDbTransact[0].CurrOeeTranReq := FALSE;
+		Globals.gDbTransact[0].CurrOeeTranCmp := FALSE;
+	END_IF
+	IF  tmrState70.Q THEN
+		hiCurrOeeLogReq := FALSE;
+		hoCurrOeeLogAck := FALSE;
+		tmrCurrOeeLog(IN:=TRUE);		
+		NextState:=0;
+	END_IF
+
+80:	(*Clear Current Oee Data Logging Event*)
+	hoCurrOeeLogAck :=(Globals.gDbTransact[0].CurrOeeTranReq AND Globals.gDbTransact[0].CurrOeeTranCmp);
+	tmrState80(IN:=TRUE, PT:=T#3.0S);
+	IF NOT hoCurrOeeLogAck THEN
+		NextState :=0;
+	END_IF
+	
+	IF  tmrState80.Q THEN
+		hiCurrOeeLogReq := TRUE;
+		hoCurrOeeLogAck := FALSE;
+		Globals.gDbTransact[0].CurrOeeTranReq := FALSE;
+		Globals.gDbTransact[0].CurrOeeTranCmp := FALSE;
+		NextState:=0;
+	END_IF	
+	
+100: (*Wait for confirmation from HMI For Shift OEE Data Logging*)
+	tmrState100(IN:=TRUE, PT:=T#3.0S);
+	IF hoShiftOeeLogAck OR tmrState100.Q THEN
+		NextState:=110;
+	END_IF
+	IF  tmrState100.Q THEN
+		hiShiftOeeLogReq := FALSE;
+		hoShiftOeeLogAck := FALSE;
+		NextState:=0;
+	END_IF
+
+110: (*Clear*)
+	tmrState110(IN:=TRUE, PT:=T#3.0S);
+	IF NOT hoShiftOeeLogAck THEN
+		NextState :=0;
+	END_IF
+	
+	IF  tmrState110.Q THEN
+		hiShiftOeeLogReq := FALSE;
+		hoShiftOeeLogAck := FALSE;
+		NextState:=0;
+	END_IF		
+	
+END_CASE]]></ST>
+    </Implementation>
+    <LineIds Name="GlobalLogic">
+      <LineId Id="4" Count="35" />
+      <LineId Id="289" Count="0" />
+      <LineId Id="41" Count="1" />
+      <LineId Id="181" Count="0" />
+      <LineId Id="43" Count="2" />
+      <LineId Id="182" Count="0" />
+      <LineId Id="46" Count="2" />
+      <LineId Id="183" Count="0" />
+      <LineId Id="49" Count="2" />
+      <LineId Id="184" Count="0" />
+      <LineId Id="52" Count="5" />
+      <LineId Id="185" Count="0" />
+      <LineId Id="58" Count="1" />
+      <LineId Id="222" Count="1" />
+      <LineId Id="60" Count="3" />
+      <LineId Id="226" Count="1" />
+      <LineId Id="64" Count="5" />
+      <LineId Id="186" Count="1" />
+      <LineId Id="228" Count="1" />
+      <LineId Id="189" Count="0" />
+      <LineId Id="73" Count="11" />
+      <LineId Id="220" Count="1" />
+      <LineId Id="85" Count="11" />
+      <LineId Id="230" Count="1" />
+      <LineId Id="262" Count="0" />
+      <LineId Id="97" Count="5" />
+      <LineId Id="216" Count="0" />
+      <LineId Id="104" Count="2" />
+      <LineId Id="219" Count="0" />
+      <LineId Id="107" Count="3" />
+      <LineId Id="224" Count="1" />
+      <LineId Id="111" Count="3" />
+      <LineId Id="232" Count="0" />
+      <LineId Id="116" Count="3" />
+      <LineId Id="218" Count="0" />
+      <LineId Id="120" Count="7" />
+      <LineId Id="234" Count="1" />
+      <LineId Id="233" Count="0" />
+      <LineId Id="129" Count="25" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

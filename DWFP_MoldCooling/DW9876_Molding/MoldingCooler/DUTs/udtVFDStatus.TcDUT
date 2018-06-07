@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <DUT Name="udtVFDStatus" Id="{d52d7bb9-9908-4e17-9015-9caabbd9d220}">
+    <Declaration><![CDATA[TYPE udtVFDStatus :
+STRUCT
+	Ready : BOOL;
+	Active: BOOL;
+	CommandFwd: BOOL;
+	RunningFwd: BOOL;
+	Accelerating: BOOL;
+	Decelerating: BOOL;
+	Reserved: BOOL;	
+	Faulted: BOOL;
+	AtSpeed: BOOL;
+	CommFreqCnt: BOOL;
+	CommLogicCnt: BOOL;
+	ParmsLocked: BOOL;
+	DigIn1Active: BOOL;
+	DigIn2Active: BOOL;
+	DigIn3Active: BOOL;
+	DigIn4Active: BOOL;
+END_STRUCT
+END_TYPE]]></Declaration>
+  </DUT>
+</TcPlcObject>

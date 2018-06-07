@@ -1,0 +1,121 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <POU Name="Stn100_01_HMI" Id="{18edb6f7-4c81-4ae0-80b3-e7d9d4545043}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM Stn100_01_HMI
+VAR_IN_OUT
+END_VAR
+VAR
+	pStation: POINTER TO Station;
+	pStats: POINTER TO Component_Stats;
+
+	State: DINT;
+	NextState: DINT;
+	FirstEntry: BOOL;
+	tmrState: TON;
+	tmrState20: TON;
+	hoMessageTrigger: BOOL := FALSE;
+
+	StationResetRequest: BOOL;
+	hiStart: BOOL;
+	hiStop: BOOL;
+	hoStartButtonColor: DINT;
+	hoStopButtonColor: DINT;
+	ActiveMsg: HMIMessage;
+	index: DINT;
+	Msg: STRING;
+	TimeStr: STRING;
+	senMessageTriggerReset: FB_Sensor;
+	hoMainBanner: HMIBanner;
+	hiMessageReceived: BOOL :=FALSE;
+	cColor: Colors;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[pStation := ADR(Globals.gStation100);
+pStats := ADR(Globals.gStn100_02_Stats);
+
+IF pStation^.CycleAuto THEN
+	hoStartButtonColor := cColor.Green;
+	hoStopButtonColor := cColor.Grey;
+ELSE
+	hoStartButtonColor := cColor.Grey;
+	hoStopButtonColor := cColor.Red;
+END_IF
+
+IF NextState <> State THEN
+	(*code: Log state change into buffer*)
+	FirstEntry := TRUE;
+	State := NextState;
+ELSE
+	FirstEntry := FALSE;
+END_IF
+
+IF FirstEntry THEN
+	tmrState(IN:=FALSE);
+	tmrState20(IN:=FALSE);
+END_IF
+
+senMessageTriggerReset(Input := hoMessageTrigger, DelayON:=T#0.0S, DelayOFF:=T#1.0S);
+
+CASE State OF
+
+0:	(*Check FIFO for message. If msg, then unload*)
+	IF pStation^.HMIMessageFIFO.Count  > 0 THEN
+		pStation^.HMIMessageFIFO.REMOVE(pFIFO:=ADR(pStation^.HMIMessageBuffer), out=> ActiveMsg);
+		(*If this is an empty message, don't pass it to the HMI*)
+		IF ActiveMsg.Text <> '' AND ActiveMsg.Text <> ' ' THEN
+			hoMessageTrigger := TRUE;
+			NextState:=10;
+		END_IF
+	END_IF
+
+10:	(*Wait for confirmation from HMI*)
+	tmrState(IN:=TRUE, PT:=T#2.0S);
+	IF hiMessageReceived OR tmrState.Q THEN
+		hoMessageTrigger := FALSE;
+		hiMessageReceived := FALSE;
+		NextState:=20;
+	END_IF
+	IF  tmrState.Q THEN
+		hiMessageReceived := FALSE;
+		hoMessageTrigger := FALSE;
+		NextState:=0;
+	END_IF
+
+20:	(*Clear*)
+	tmrState20(IN:=TRUE, PT:=T#1.5S);
+	IF NOT hiMessageReceived THEN
+		NextState:=0;
+	END_IF
+	IF  tmrState20.Q THEN
+		hiMessageReceived := FALSE;
+		hoMessageTrigger := FALSE;
+		NextState:=0;
+	END_IF
+END_CASE
+
+(*Message banner*)
+IF LEN(pStation^.FirstFault.StringData[0]) > 0 THEN
+	hoMainBanner.Text :=pStation^.FirstFault.StringData[0];
+	hoMainBanner.AltText :=pStation^.FirstFault.StringData[1];
+	hoMainBanner.Color := cColor.Red;
+ELSIF LEN(pStation^.OperatorMessage.Text) > 0 THEN
+	hoMainBanner.Text :=pStation^.OperatorMessage.Text;
+	hoMainBanner.AltText :=pStation^.OperatorMessage.AltText;
+	hoMainBanner.Color := pStation^.OperatorMessage.Color;
+ELSIF LEN(pStation^.StationMessage.Text) > 0 THEN
+	hoMainBanner.Text :=pStation^.StationMessage.Text;
+	hoMainBanner.AltText :=pStation^.StationMessage.AltText;
+	hoMainBanner.Color := pStation^.StationMessage.Color;;
+END_IF]]></ST>
+    </Implementation>
+    <LineIds Name="Stn100_01_HMI">
+      <LineId Id="3" Count="27" />
+      <LineId Id="32" Count="9" />
+      <LineId Id="43" Count="2" />
+      <LineId Id="109" Count="0" />
+      <LineId Id="46" Count="8" />
+      <LineId Id="56" Count="24" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

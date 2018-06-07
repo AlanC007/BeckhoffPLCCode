@@ -1,0 +1,23 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <DUT Name="udtDBStoreFault" Id="{3bfaf2c6-62ff-429b-be3b-c5e6d18a059e}">
+    <Declaration><![CDATA[TYPE udtDBStoreFault :
+STRUCT
+	Station : DINT;
+	FaultCode: DINT;
+	FaultText : STRING[255];
+	AcknowledgeTime: REAL;
+	Duration: REAL;
+	TimeStamp:Timestamp;
+	Data1 : REAL;
+	Data2 : REAL;
+	Data3:  REAL;
+	StringData1 : STRING[255];
+	StringData2 : STRING[255];
+	ResultCode: DINT;
+	ResultText: STRING[255] ;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

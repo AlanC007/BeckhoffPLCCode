@@ -1,0 +1,188 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4022.7">
+  <POU Name="GlobalConfig" Id="{964f40ab-7c55-422e-af21-27d0b7d19fce}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM GlobalConfig
+VAR
+	FirstScan:R_TRIG;
+	FBStartHMI:NT_StartProcess;
+	tmrDelayHMIStart:TON;
+
+	fbNTGetLocalTime : FB_LocalSystemTime;
+	LocalSystemTime : T_FileTime;
+	fbDisplay : FB_CXSetTextDisplay;
+	hiStartOfShift1Min : DINT;
+	hiStartOfShift1Hour : DINT;
+	hiStartOfShift2Min : DINT;
+	hiStartOfShift2Hour : DINT;
+	hiStartOfShift3Min : DINT;
+	hiStartOfShift3Hour : DINT;
+	hiPlannedDownTimeShift1Min : DINT;
+	hiPlannedDownTimeShift2Min : DINT;
+	hiPlannedDownTimeShift3Min : DINT;
+	hiIdealCycleTime : REAL;
+	hiAggregateInterval : DINT;
+	TempFullRate : DINT;
+	TempRateCalc : FLOAT;
+	tempRejectRate : FLOAT;
+	
+	tTime : TimeStamp;
+	END_VAR
+	]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[FirstScan(CLK:=TRUE);
+Globals.gFirstScan:=FirstScan.Q OR Globals.gInitialScanForce;
+Globals.gInitialScanForce := FALSE;
+IF Globals.gFirstScan THEN
+	(*Initialize all FIFOs to avoid Access Violation exception*)
+	Globals.gStn100_StateTraceFifo.INIT(pFIFO := ADR(Globals.gStn100_StateTraceBuffer));
+	Globals.gStation100.AttentionRequiredFIFO.INIT(pFIFO := ADR(Globals.gStation100.AttentionRequiredFIFOBuffer));
+	Globals.gStation100.NotOKtoStopFIFO.INIT(pFIFO := ADR(Globals.gStation100.NotOKToStopFIFOBuffer));
+	Globals.gStation100.FaultedFIFO.INIT(pFIFO := ADR(Globals.gStation100.FaultedFIFOBuffer));
+	Globals.gStation100.HMIMessageFIFO.INIT(pFIFO := ADR(Globals.gStation100.HMIMessageBuffer));
+	
+	(*Set Time Zone*)
+	Globals.gTimeZoneOffsetFromUTC := -7;
+	Globals.gSoftwareRevision := Dint_to_String(Globals.gstLibVersion.iRevision);
+	Globals.gStation100.MachineID :=4;
+	
+	(*Set Initial Start Of Shift Values HackAlert*)
+	Globals.gStn100_02_Stats.StartOfShift[0,0] :=0;	
+	Globals.gStn100_02_Stats.StartOfShift[0,1] :=7;	
+	Globals.gStn100_02_Stats.StartOfShift[1,0] :=0;	
+	Globals.gStn100_02_Stats.StartOfShift[1,1] :=15;	
+	Globals.gStn100_02_Stats.StartOfShift[2,0] :=0;	
+	Globals.gStn100_02_Stats.StartOfShift[2,1] :=23;		
+END_IF
+
+(*Set display*)
+fbDisplay(bExecute := Globals.gFirstScan,
+			nDevID := 2,
+			nMode := e_CX1100_WRITELine1,
+			stLine := 'DW2164_rev01',
+			nCursorPos := 0);
+
+fbNTGetLocalTime(
+	sNetID:='' ,
+	bEnable:= TRUE,
+	dwCycle:= 1,
+	dwOpt:= 0,
+	tTimeout:= DEFAULT_ADS_TIMEOUT );
+LocalSystemTime := SYSTEMTIME_TO_FILETIME(fbNTGetLocalTime.systemTime);
+Globals.gCurrentTime.CurrentValue.dwHighPart := LocalSystemTime.dwHighDateTime;
+Globals.gCurrentTime.CurrentValue.dwLowPart := LocalSystemTime.dwLowDateTime;
+Globals.gCurrentTime.DateTime := fbNTGetLocalTime.systemTime;
+templatecore.GVL.gCurrentTime := Globals.gCurrentTime;
+
+tTime := Globals.gCurrentTime;
+tempRejectRate := (Globals.gRejectRate / 1000);
+TempFullRate :=(Globals.gTargetRatePerMin*60);
+TempRateCalc := FLOAT_TO_DINT(TempFullRate*(tempRejectRate));
+Globals.gTargetRatePerHour := (TempFullRate-FLOAT_TO_DINT(TempRateCalc));
+
+(*STATION 100*)
+(*Reset logic for top-level main component*)
+Globals.gStn100_10_Main.Framework.ResetStart := Globals.gStation100.CycleReset;
+IF Globals.gStn100_10_Main.Framework.ResetDone THEN
+	Globals.gStation100.ResetDone := TRUE;
+ELSE
+	Globals.gStation100.ResetDone := FALSE;
+END_IF
+
+(*Set Component IDs and Configurations*)
+Globals.gStation100.StationID := 100;
+Globals.gStn100_02_Stats.Framework.ComponentIDRecord.ID := 2;
+Globals.gStn100_02_Stats.Framework.ComponentIDRecord.Name := 'Stats';
+Globals.gStn100_10_Main.Framework.ComponentIDRecord.ID := 10;
+Globals.gStn100_10_Main.Framework.ComponentIDRecord.Name := 'Main';
+Globals.gStn100_20_CoolingConveyor.Framework.ComponentIDRecord.ID := 20;
+Globals.gStn100_20_CoolingConveyor.Framework.ComponentIDRecord.Name := 'Cooling Conv';
+Globals.gStn100_30_VibratoryConveyor.Framework.ComponentIDRecord.ID := 30;
+Globals.gStn100_30_VibratoryConveyor.Framework.ComponentIDRecord.Name := 'Vibratory Conv';
+Globals.gStn100_40_Vibrator.Framework.ComponentIDRecord.ID := 40;
+Globals.gStn100_40_Vibrator.Framework.ComponentIDRecord.Name := 'Vibrator';
+
+
+IF Globals.gStn100_02_Stats.IdealCycleTime <= 0.3 THEN
+	Globals.gStn100_02_Stats.IdealCycleTime := 0.3; (*time in seconds*)
+END_IF
+Globals.gStn100_02_Stats.AggregateInterval := 3; (*aggregate time in minutes*)
+IF Globals.gStn100_02_Stats.AggregateInterval < 1 THEN
+	Globals.gStn100_02_Stats.AggregateInterval  := 1;
+END_IF
+
+(*Handle The HMI OEE Config Items*)
+IF ((NOT Globals.gStation100.CycleAuto) AND (NOT Globals.gStation100.CycleFaulted)) THEN
+	IF (hiStartOfShift1Min >0 AND hiStartOfShift1Min <> Globals.gStn100_02_Stats.StartOfShift[0,0]) THEN
+		Globals.gStn100_02_Stats.StartOfShift[0,0] := hiStartOfShift1Min;
+	END_IF
+	IF (hiStartOfShift1Hour >0 AND hiStartOfShift1Hour <> Globals.gStn100_02_Stats.StartOfShift[0,1]) THEN
+		Globals.gStn100_02_Stats.StartOfShift[0,1] := hiStartOfShift1Hour;
+	END_IF
+	IF (hiStartOfShift2Min >0 AND hiStartOfShift2Min <> Globals.gStn100_02_Stats.StartOfShift[1,0]) THEN
+		Globals.gStn100_02_Stats.StartOfShift[1,0] := hiStartOfShift2Min;
+	END_IF	
+	IF (hiStartOfShift2Hour >0 AND hiStartOfShift2Hour <> Globals.gStn100_02_Stats.StartOfShift[1,1]) THEN
+		Globals.gStn100_02_Stats.StartOfShift[1,1] := hiStartOfShift2Hour;
+	END_IF	
+	IF (hiStartOfShift3Min >0 AND hiStartOfShift3Min <> Globals.gStn100_02_Stats.StartOfShift[2,0]) THEN
+		Globals.gStn100_02_Stats.StartOfShift[2,0] := hiStartOfShift3Min;
+	END_IF	
+	IF (hiStartOfShift3Hour >0 AND hiStartOfShift3Hour <> Globals.gStn100_02_Stats.StartOfShift[2,1]) THEN
+		Globals.gStn100_02_Stats.StartOfShift[2,1] := hiStartOfShift3Hour;
+	END_IF	
+	IF (hiPlannedDownTimeShift1Min >0 AND hiPlannedDownTimeShift1Min <> Globals.gStn100_02_Stats.PlannedDownTime[0]) THEN
+		Globals.gStn100_02_Stats.PlannedDownTime[0] := hiPlannedDownTimeShift1Min;
+	END_IF	
+	IF (hiPlannedDownTimeShift2Min >0 AND hiPlannedDownTimeShift2Min <> Globals.gStn100_02_Stats.PlannedDownTime[1]) THEN
+		Globals.gStn100_02_Stats.PlannedDownTime[1] := hiPlannedDownTimeShift2Min;
+	END_IF	
+	IF (hiPlannedDownTimeShift3Min >0 AND hiPlannedDownTimeShift3Min <> Globals.gStn100_02_Stats.PlannedDownTime[2]) THEN
+		Globals.gStn100_02_Stats.PlannedDownTime[2] := hiPlannedDownTimeShift3Min;
+	END_IF		
+	IF (hiIdealCycleTime >0 AND hiIdealCycleTime <> Globals.gStn100_02_Stats.IdealCycleTime) THEN
+		Globals.gStn100_02_Stats.IdealCycleTime := hiIdealCycleTime;
+	END_IF	
+	IF (hiAggregateInterval >0 AND hiAggregateInterval <> Globals.gStn100_02_Stats.AggregateInterval) THEN
+		Globals.gStn100_02_Stats.AggregateInterval := hiAggregateInterval;
+	END_IF	
+END_IF
+]]></ST>
+    </Implementation>
+    <LineIds Name="GlobalConfig">
+      <LineId Id="3" Count="13" />
+      <LineId Id="241" Count="0" />
+      <LineId Id="17" Count="6" />
+      <LineId Id="25" Count="18" />
+      <LineId Id="146" Count="0" />
+      <LineId Id="44" Count="0" />
+      <LineId Id="46" Count="0" />
+      <LineId Id="179" Count="0" />
+      <LineId Id="177" Count="0" />
+      <LineId Id="175" Count="0" />
+      <LineId Id="48" Count="0" />
+      <LineId Id="173" Count="0" />
+      <LineId Id="49" Count="0" />
+      <LineId Id="307" Count="0" />
+      <LineId Id="50" Count="5" />
+      <LineId Id="308" Count="1" />
+      <LineId Id="56" Count="4" />
+      <LineId Id="268" Count="5" />
+      <LineId Id="336" Count="0" />
+      <LineId Id="61" Count="0" />
+      <LineId Id="63" Count="12" />
+      <LineId Id="77" Count="2" />
+      <LineId Id="81" Count="2" />
+      <LineId Id="85" Count="2" />
+      <LineId Id="89" Count="2" />
+      <LineId Id="93" Count="2" />
+      <LineId Id="97" Count="2" />
+      <LineId Id="101" Count="2" />
+      <LineId Id="105" Count="2" />
+      <LineId Id="109" Count="1" />
+      <LineId Id="209" Count="1" />
+      <LineId Id="114" Count="1" />
+      <LineId Id="118" Count="1" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

@@ -1,0 +1,48 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <POU Name="FB_Sensor" Id="{a224210b-4161-429c-a172-8b0ac568019d}" SpecialFunc="None">
+    <Declaration><![CDATA[FUNCTION_BLOCK FB_Sensor
+(*Sensor Debounce
+ON is TRUE after Input has been TRUE for DelayON milliseconds
+ON is FALSE after Input has been FALSE for DelayOFF milliseconds*)
+
+VAR_INPUT
+	Input: BOOL; (*Raw physical input*)
+	DelayON: TIME; (*ON debounce time in milliseconds*)
+	DelayOFF: TIME; (*OFF debounce time in milliseconds*)
+END_VAR
+
+VAR_OUTPUT
+	ON: BOOL; (*Debounced input*)
+END_VAR
+
+VAR
+	tmrDelayON: TON; (*Input ON debounce delay*)
+	tmrDelayOFF: TON; (*Input OFF debounce delay*)
+	InputON: R_TRIG; (*Rising edge Input ON debounced*)
+	InputOFF: R_TRIG; (*Rising edge Input OFF debounced*)
+END_VAR
+]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[(*Debounce timers*)
+tmrDelayON(IN:=Input,PT:=DelayON);
+tmrDelayOFF(IN:=NOT(Input),PT:=DelayOFF);
+
+(*Rising edge of debounce timer outputs*)
+InputON(CLK:=tmrDelayON.Q);
+InputOFF(CLK:=tmrDelayOFF.Q);
+
+(*Debounced Input Logic*)
+IF InputON.Q THEN
+	ON:=TRUE;
+END_IF
+IF InputOFF.Q THEN
+	ON:=FALSE;
+END_IF]]></ST>
+    </Implementation>
+    <LineIds Name="FB_Sensor">
+      <LineId Id="3" Count="13" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <DUT Name="udtVFDCommand" Id="{5680323a-a88a-407d-b460-4c1303a14a92}">
+    <Declaration><![CDATA[TYPE udtVFDCommand :
+STRUCT
+	Stop : BOOL;
+	Start: BOOL;
+	Jog: BOOL;
+	ClearFaults: BOOL;
+	RunFwd: BOOL;
+	RunRev: BOOL;
+	ForceKeypadCtrl: BOOL;
+	MOPIncrement: BOOL;
+	AccelRate1: BOOL;
+	AccelRate2: BOOL;
+	DecelRate1: BOOL;
+	DecelRate2: BOOL;
+	FreqSel01: BOOL;
+	FreqSel02: BOOL;
+	FreqSel03: BOOL;
+	MOPDecrement: BOOL;
+END_STRUCT
+END_TYPE]]></Declaration>
+  </DUT>
+</TcPlcObject>

@@ -1,0 +1,752 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4022.7">
+  <POU Name="Stn100_10_Main" Id="{40888391-2655-46be-a84a-3bdfd53079f1}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM Stn100_10_Main
+VAR PERSISTENT
+	iStdVelocity: REAL; (*0 to 100%*)
+END_VAR
+
+VAR
+	pCmp: POINTER TO udtCmpBasemain;
+	pStation: POINTER TO Station;
+	pStats: POINTER TO Component_Stats;
+	Local: FrameworkLocal;
+	Framework: FB_Framework;
+	TempEvent: StatsEvent;
+	pCoolingConveyor: POINTER TO udtCmpVFD;
+	pVibratoryConveyor: POINTER TO udtCmpVFD;
+	pVibrator: POINTER TO udtCmpVFD;
+	tmrCycleAuto: TON;
+	Ok2Fill: BOOL;
+	bOk2Fill: BOOL;
+	BoxFillComplete :BOOL;	
+	tmrStarved: TON;
+	Starved: BOOL;
+	tmrBlocked: TON;
+	Blocked: BOOL;
+	TempInMoldDrop: REAL;
+	TempInChuteDrop: REAL;
+	tempCalc1:REAL;
+	tempCalc2 : REAL;
+	tempChuteCalc1 : REAL;
+	tempChuteCalc2 : REAL;
+	bNewBoxIndexing :BOOL;
+	tmr_DelayLast : TON;
+
+	(*Inputs*)
+	iBoxPres_Infeeed AT %I*  : BOOL;
+	iBoxPres_InfeedEntrance AT %I* :BOOL;
+	iBoxPres_Filling AT %I*  : BOOL;
+	iBoxPres_OutFeed AT %I*  : BOOL;
+	iBoxPres_OutFeedExit AT %I* :BOOL;
+	iWR_FillCmp AT %I* :BOOL;
+	iBoxCyl_US_Retd AT%I* :BOOL;
+	iBoxCyl_DS_Retd AT%I* :BOOL;
+	iTempAtMoldDrop AT %I* :DINT;
+	iTempAtShuteDrop AT %I* :DINT;
+	iWeighRightAutoMode :BOOL;
+	
+	(*Sensors*)
+	senBoxPresentInfeed_Entrance: FB_Sensor;
+	senBoxPresentInfeed: FB_Sensor;
+	senBoxPresentFilling: FB_Sensor;
+	senBoxPresentOutFeed: FB_Sensor;
+	senBoxPresentOutFeed_Exit: FB_Sensor;
+	senWR_FillCmp: FB_SENSOR;
+	senBoxCyl_US_Retd: FB_Sensor;
+	senBoxCyl_DS_Retd: FB_Sensor;	
+	
+	(*Outputs*)
+	oInfeedConv_PwrOn AT %Q* :BOOL;
+	oInfeedConv_Release AT %Q* : BOOL;
+	oInfeedConv_EntRelease AT %Q* : BOOL;
+	oBoxCyl_US_Ret AT %Q* : BOOL;
+	oBoxCyl_DS_Ret AT %Q* : BOOL;		
+	oWeighRight_Start AT %Q* : BOOL;
+	oWeighRight_Ok2Fill AT %Q* : BOOL;	
+	oOutFeedConv_PwrOn AT %Q* :BOOL;	
+	oOutFeedConv_Recieve AT %Q* :BOOL;	
+	oOutFeedConv_ExitRelease AT %Q* :BOOL;
+	
+	(*Operator Inputs*)
+	hiBoxCylExt: BOOL;
+	hiBoxCylRet: BOOL;	
+	hiInfeedBox_Release : BOOL;
+	hoActTempMoldDrop : LREAL;
+	hoActTempShuteDrop : LREAL;
+	hiInfeedReleaseEntrance : BOOL;
+	hiInfeedReleaseExit : BOOL;
+	hiOutfeedReleaseEntrance : BOOL;
+	hiOutfeedReleaseExit : BOOL;
+	hoBoxPrintReq :BOOL;
+	hiBoxPrintAck :BOOL;
+	
+
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF Globals.gFirstScan THEN
+	pCmp := ADR(Globals.gStn100_10_Main);
+	pStation := ADR(Globals.gStation100);
+	pStats :=ADR(Globals.gStn100_02_Stats);
+	(*Address your components here that are owned by this Main*)
+	pCoolingConveyor := ADR(Globals.gStn100_20_CoolingConveyor);
+	pVibratoryConveyor := ADR(Globals.gStn100_30_VibratoryConveyor);
+	pVibrator := ADR(Globals.gStn100_40_Vibrator);
+
+	Local.Name :=pCmp^.Framework.ComponentIDRecord.Name;
+	Local.pStateTraceBuffer := ADR(Globals.gStn100_StateTraceBuffer);
+	Local.pStateTraceFifo := ADR(Globals.gStn100_StateTraceFifo);
+	Local.pStats := ADR(Globals.gStn100_02_Stats);
+	Local.FaultTimeLong := T#10000MS;
+	Local.FaultTimeShort := T#5000MS;
+	
+	DefineMessages();
+END_IF
+
+FrameWork(pFramework := ADR(pCmp^.Framework), 
+		  pLocal := ADR(Local), 
+		  pStation := pStation);
+
+(*House Keeping*)
+Ok2Fill:=(senBoxPresentFilling.ON AND bOk2Fill);
+BoxFillComplete :=(senWR_FillCmp.ON);
+iWeighRightAutoMode := Globals.gWeighRightInputs.2;
+oWeighRight_Ok2Fill := (Ok2Fill AND Local.CycleAuto);
+
+
+(*Sensor debounce*)
+senBoxPresentInfeed_Entrance(Input := iBoxPres_InfeedEntrance, DelayON := T#100MS, DelayOFF := T#100MS);
+senBoxPresentInfeed(Input := iBoxPres_Infeeed, DelayON := T#100MS, DelayOFF := T#100MS);
+senBoxPresentFilling(Input := iBoxPres_Filling, DelayON := T#2500MS, DelayOFF := T#100MS);
+senBoxPresentOutFeed(Input := iBoxPres_OutFeed, DelayON := T#100MS, DelayOFF := T#100MS);
+senBoxPresentOutFeed_Exit(Input := iBoxPres_OutFeedExit, DelayON := T#100MS, DelayOFF := T#100MS);
+senWR_FillCmp(Input := iWR_FillCmp, DelayON := T#300MS, DelayOFF := T#300MS);
+senBoxCyl_US_Retd(Input := iBoxCyl_US_Retd, DelayON := T#300MS, DelayOFF := T#300MS);
+senBoxCyl_DS_Retd(Input := iBoxCyl_DS_Retd, DelayON := T#300MS, DelayOFF := T#300MS);
+
+(*Set base speed reference for all sorting components*)
+pCoolingConveyor^.BaseSpeedRef := iStdVelocity;
+pVibratoryConveyor^.BaseSpeedRef := iStdVelocity;
+pVibrator^.BaseSpeedRef := iStdVelocity;
+(*Calc Degrees F from Inputs*)
+TempInMoldDrop :=DINT_TO_REAL(iTempAtMoldDrop)/100;
+tempCalc1 :=((TempInMoldDrop*9/5));
+tempCalc2 := tempCalc1 +32.0;
+hoActTempMoldDrop :=REAL_TO_LREAL(tempCalc2);
+TempInChuteDrop :=DINT_TO_REAL(iTempAtShuteDrop)/100;
+tempChuteCalc1 :=((TempInChuteDrop*9/5));
+tempChuteCalc2 := tempChuteCalc1 +32.0;
+hoActTempShuteDrop :=REAL_TO_LREAL(tempChuteCalc2);
+
+(*Retract the BoxHold Down Cyl on an emergency stop*)
+IF pStation^.EmergencyStop THEN
+	(*oBoxCylRet := FALSE;*)
+END_IF
+(* Boxes Not Present Conditions*)
+tmrStarved(IN:=(Local.CycleAuto AND Local.State = 0 AND NOT iBoxPres_Infeeed), PT:=T#1S);
+tmrBlocked(IN:=(Local.CycleAuto AND Local.State = 0 AND iBoxPres_OutFeed), PT:=T#1S);
+(* HACK Alert Added this Delay to allow last dump to settle*)
+tmr_DelayLast(IN:=Local.State = 100, PT:=T#6S);	
+
+IF NOT Starved AND tmrStarved.Q THEN
+	Starved := TRUE;
+	TempEvent.EType := Globals.cStats.Starved;
+	F_SendEvent(ADR(pStats^.StatsEventFIFO),ADR(pStats^.StatsEventBuffer),ADR(TempEvent));
+END_IF
+IF Starved AND Local.State <> 0 THEN
+	Starved := FALSE;
+	IF Local.CycleAuto THEN
+		TempEvent.EType := Globals.cStats.Working;
+		F_SendEvent (ADR(pStats^.StatsEventFIFO), ADR(pStats^.StatsEventBuffer), ADR(TempEvent));
+	END_IF
+END_IF
+
+IF NOT Blocked AND tmrBlocked.Q THEN
+	Blocked := TRUE;
+	TempEvent.EType := Globals.cStats.Blocked;
+	F_SendEvent(ADR(pStats^.StatsEventFIFO),ADR(pStats^.StatsEventBuffer),ADR(TempEvent));
+END_IF
+IF Blocked AND Local.State <> 0 THEN
+	Blocked := FALSE;
+	IF Local.CycleAuto THEN
+		TempEvent.EType := Globals.cStats.Working;
+		F_SendEvent (ADR(pStats^.StatsEventFIFO), ADR(pStats^.StatsEventBuffer), ADR(TempEvent));
+	END_IF
+END_IF
+
+
+(**********************
+    Sequence logic
+***********************)
+CASE Local.State OF
+	
+0: (*Wait for Something to Do*)		
+	Local.OKToStop := TRUE;
+	oInfeedConv_PwrOn := TRUE;
+	oOutFeedConv_PwrOn := TRUE;
+	
+	IF NOT pStation^.StopRequest AND((NOT pCoolingConveyor^.Running AND Ok2Fill) AND NOT(BoxFillComplete)) THEN
+		Local.NextState := 10;
+	END_IF
+	
+	IF NOT(senBoxPresentFilling.ON)AND(senBoxPresentInfeed.ON) AND NOT (bNewBoxIndexing) THEN
+		Local.NextState := 50;
+	END_IF
+	
+	IF(senBoxPresentInfeed_Entrance.ON AND NOT senBoxPresentInfeed.ON)  AND (Ok2Fill) THEN
+		Local.NextState :=200;
+	END_IF
+	
+	//IF(senBoxPresentOutFeed.ON AND NOT senBoxPresentOutFeed_Exit.ON) THEN
+	//	Local.NextState :=300;
+	//END_IF	
+	
+	IF(BoxFillComplete) AND (senBoxPresentFilling.ON) AND NOT(senBoxPresentOutFeed.ON AND senBoxPresentOutFeed_Exit.ON) THEN
+		Local.NextState := 100;
+	END_IF
+	(* Wait For The Exit Area Clear Before Proceeding Prompt Operator*)
+	IF (BoxFillComplete) AND (senBoxPresentFilling.ON) AND (senBoxPresentOutFeed.ON OR senBoxPresentOutFeed_Exit.ON) THEN
+		
+		Local.NextState := 5;
+	END_IF
+	
+10: (*Start the Cooling Conveyor*)
+	IF Local.FirstEntry THEN
+		pCoolingConveyor^.RunReq :=TRUE;
+	END_IF	
+	
+	Local.OKToStop := TRUE;	
+	
+	(*Wait for the Cooling Conveyor Running Signal*)
+	IF pCoolingConveyor^.Running THEN
+		Local.NextState := 20;
+	END_IF
+	
+20: (*Start the Vibrator*)
+	IF Local.FirstEntry THEN
+		pVibrator^.RunReq :=TRUE;
+	END_IF	
+	
+	Local.OKToStop := TRUE;	
+	
+	(*Wait for the Vibrator Running Signal*)
+	IF pVibrator^.Running THEN
+		oWeighRight_Ok2Fill :=TRUE;
+		oWeighRight_Start :=TRUE;
+		bOk2Fill := TRUE;
+		Local.NextState := 0;
+	END_IF	
+
+50: (*Index Box into Filling Area*)
+	IF Local.FirstEntry THEN
+		pVibratoryConveyor^.RunReq :=1;
+	END_IF
+	
+	Local.OKToStop := FALSE;
+	
+	IF (pVibratoryConveyor^.Running) THEN
+		Local.NextState := 60;
+	END_IF
+	
+60: (*Fillig Conv Running Release BOX from Infeed*)
+	IF Local.FirstEntry THEN
+		oBoxCyl_US_Ret :=FALSE;
+		oBoxCyl_DS_Ret :=TRUE;
+		Local.tmrFault.PT :=T#2000MS;
+	END_IF
+		Local.OKToStop := TRUE; 
+		
+	IF NOT(senBoxCyl_US_Retd.ON) AND (senBoxCyl_DS_Retd.ON)THEN
+		Local.NextState := 65;
+	END_IF
+	
+	IF Local.tmrFault.Q THEN
+		IF (senBoxCyl_US_Retd.ON) THEN
+			Local.FaultNumber :=1;
+		END_IF
+		IF NOT(senBoxCyl_DS_Retd.ON) THEN
+			Local.FaultNumber :=2;
+		END_IF		
+	END_IF
+
+65: (* Wait Box Present*)
+	Local.OKToStop := TRUE;
+	IF Local.FirstEntry THEN
+		oInfeedConv_Release	:=TRUE;
+		bNewBoxIndexing :=TRUE;
+	END_IF	
+
+	IF NOT (senBoxPresentInfeed.ON) THEN
+		oInfeedConv_Release	:=FALSE;
+	END_IF
+	IF (senBoxPresentFilling.ON) THEN
+		oInfeedConv_Release	:=FALSE;
+		Local.NextState := 70;
+	END_IF		
+70: (*Stop the Conv and Ext Cylinder*)
+	Local.OKToStop := TRUE;
+	IF Local.FirstEntry THEN
+		pVibratoryConveyor^.RunReq :=0;
+	END_IF
+	
+	IF NOT pVibratoryConveyor^.Running  THEN
+		Local.NextState := 80;
+	END_IF
+
+80: (*Ext Box Cylinder*)
+	Local.OKToStop := TRUE;
+	IF Local.FirstEntry THEN
+		oBoxCyl_DS_Ret :=FALSE;
+	END_IF
+	
+	IF NOT(senBoxCyl_DS_Retd.ON) THEN
+		Local.NextState := 0;
+		bNewBoxIndexing :=FALSE;
+		bOk2Fill :=TRUE;
+	END_IF
+
+100: (*Box Fill Complete Release Full and Allow Empty*)
+	(*Retract Hold Down Cylinder*)
+	IF Local.FirstEntry THEN
+		(**)
+	END_IF
+		Local.LongFaultState :=TRUE;
+		Local.OKToStop := (tmr_DelayLast.Q);
+		
+	IF(tmr_DelayLast.Q) THEN	
+		pCoolingConveyor^.RunReq :=FALSE;
+		pVibrator^.RunReq :=FALSE;
+		oWeighRight_Start :=FALSE;
+		oBoxCyl_US_Ret :=TRUE;		
+	END_IF
+	
+	IF (senBoxCyl_US_Retd.ON) THEN
+		Local.NextState := 110;
+		Local.LongFaultState :=FALSE;
+	END_IF
+
+110: (*Check Exit Area for Box Present*)
+		Local.OKToStop := TRUE;			
+	IF (Local.FirstEntry) THEN
+		TempEvent.EType := Globals.cStats.Good;
+		TempEvent.Data[0] := 1500;
+		F_SendEvent(ADR(pStats^.StatsEventFIFO),ADR(pStats^.StatsEventBuffer),ADR(TempEvent));
+
+	END_IF
+	
+	IF NOT(senBoxPresentOutFeed.ON) THEN
+		hoBoxPrintReq :=TRUE;
+		Local.NextState :=115;
+	END_IF
+	
+115: (* Retract DS Cylinder*)
+		Local.OKToStop := TRUE;	
+		IF Local.FirstEntry THEN
+			oBoxCyl_DS_Ret :=FALSE;
+		END_IF
+
+	IF NOT(senBoxCyl_DS_Retd.ON) THEN
+		Local.NextState :=120;
+	END_IF
+
+120: (*Release Box From Filling Area*)
+	IF Local.FirstEntry THEN
+		bOk2Fill := FALSE;
+		pVibratoryConveyor^.RunReq :=TRUE;
+		oOutFeedConv_Recieve :=TRUE;	
+	END_IF
+	
+	Local.OKToStop := TRUE;	
+	(*Wait for the Box to Arrive at the Outfeed Conv*)
+	IF (senBoxPresentOutFeed.ON) OR (senBoxPresentOutFeed_Exit.ON) THEN
+		oOutFeedConv_Recieve :=FALSE;
+		Local.NextState :=130;
+	END_IF
+	
+130: (* Check *)
+	Local.OKToStop := TRUE;
+		IF Local.FirstEntry THEN
+			(* *)
+		END_IF
+		
+	(*Wzit for Box Not Present at Filling*)
+	IF NOT(senBoxPresentFilling.ON) THEN
+		Local.NextState :=0;
+	END_IF	
+
+200: (*Box Infeed Entrance Present and No Box Present for Loading*)
+	IF Local.FirstEntry THEN
+		oInfeedConv_EntRelease := TRUE;
+		oInfeedConv_Release :=TRUE;	
+	END_IF
+	
+	IF (senBoxPresentInfeed.ON) THEN
+		Local.NextState :=0;
+		oInfeedConv_EntRelease := FALSE;
+		oInfeedConv_Release :=FALSE;			
+	END_IF
+	
+300: (*Box OutFeed Present at Loading and Nothing Present at Exit Index The Box*)
+	IF Local.FirstEntry THEN
+		oOutFeedConv_Recieve := TRUE;
+		oOutFeedConv_ExitRelease :=TRUE;	
+	END_IF
+	
+	IF (senBoxPresentOutFeed_Exit.ON) THEN
+		Local.NextState :=0;
+		oOutFeedConv_Recieve := FALSE;
+		oOutFeedConv_ExitRelease :=FALSE;			
+	END_IF
+(**********************
+    Idle and Reset logic
+***********************)
+5000: (*Idle*)
+	IF Local.FirstEntry THEN
+		(*If this component owns components, reset the ResetStart flags here*)
+		pCmp^.Framework.ResetDone := FALSE;
+		Local.ManualCycleDone := FALSE;
+		pCoolingConveyor^.Framework.ResetStart := 0;
+		pVibratoryConveyor^.Framework.ResetStart := 0;
+		pVibrator^.Framework.ResetStart := 0;
+		oWeighRight_Ok2Fill :=FALSE;
+		oWeighRight_Start :=FALSE;
+		oInfeedConv_PwrOn := FALSE;
+		oInfeedConv_Release :=FALSE;
+		oInfeedConv_EntRelease :=FALSE;
+		oOutFeedConv_PwrOn := FALSE;
+		oOutFeedConv_Recieve :=FALSE;
+		oOutFeedConv_ExitRelease :=FALSE;
+		pVibratoryConveyor^.RunReq :=0;
+		Local.ReEntryState := 0; 
+		bNewBoxIndexing :=0;
+	END_IF
+	
+	Local.OKToStop := TRUE;
+	IF NOT Local.AsynchFault OR Local.AsynchFaultReactionComplete THEN
+		IF Local.CycleAuto AND NOT Local.CycleReset AND NOT Local.CycleManual THEN
+			Local.NextState := Local.ReEntryState;
+		ELSIF Local.CycleReset AND pCmp^.Framework.ResetStart AND NOT Local.CycleAuto AND NOT Local.CycleManual THEN
+			IF pStation^.FullInitRequired OR pCmp^.Framework.FullInitRequired THEN
+				Local.NextState := 5010;
+			ELSIF NOT pStation^.FullInitRequired AND NOT pCmp^.Framework.FullInitRequired THEN
+				IF NOT Local.AsynchFault THEN
+					Local.NextState := 6000;
+				ELSIF Local.AsynchFault THEN
+					Local.NextState := 7500;
+				END_IF
+			END_IF
+		ELSIF Local.CycleManual AND NOT Local.CycleAuto AND NOT Local.CycleReset THEN
+			Local.NextState := 8000;
+		END_IF
+	ELSIF Local.AsynchFault AND NOT Local.AsynchFaultReactionComplete THEN
+		Local.NextState := 7000;
+	END_IF
+
+5010: (*Full Initialization*)
+	IF Local.FirstEntry THEN
+		Local.ReEntryState := 0;
+		pCoolingConveyor^.RunReq := 0;
+		pVibratoryConveyor^.RunReq := 0;
+		pVibrator^.RunReq := 0;
+		bOk2Fill :=FALSE;
+		IF senBoxPresentFilling.ON THEN
+			bOk2Fill :=TRUE;
+			bNewBoxIndexing :=FALSE;
+		END_IF
+		
+	END_IF
+	
+	Local.NextState := 5020;
+
+5020: (*Test to see if the Last Auto State was Filling a Box and Not Fill Complete*)
+	IF(BoxFillComplete AND senBoxPresentFilling.ON) THEN
+		bOk2Fill:= FALSE;
+	END_IF
+	
+	IF (BoxFillComplete AND NOT senBoxPresentFilling.ON) THEN
+		;
+	END_IF
+	Local.NextState := 9000;
+	
+6000: (*Fault Reset - Check faulted state*)
+	IF TRUE THEN
+		Local.NextState := 6010;
+	ELSE
+		Local.NextState := 9000;
+	END_IF
+
+6010: (*Try again*)
+	IF Local.FirstEntry THEN
+		Local.ReEntryState := 0;
+	END_IF
+	
+	Local.NextState := 9000;
+
+7000: (*Asynch Fault Reaction*)
+	Local.NextState := 7499;
+
+7499: (*Asynch fault reaction complete*)
+	IF Local.FirstEntry THEN
+		Local.AsynchFaultReactionComplete := TRUE;
+	END_IF
+	
+	Local.NextState := 5000;
+
+7500: (*Asynch Fault recovery*)
+	Local.NextState := 9000;
+
+8000: (*Manual Cycle Request*)
+	Local.NextState := 9999;
+
+9000: (*Reset*)
+	(*On Entry Code*)
+	IF Local.FirstEntry THEN
+		pCoolingConveyor^.Framework.ResetStart := 1;
+		pVibratoryConveyor^.Framework.ResetStart := 1;
+		pVibrator^.Framework.ResetStart := 1;
+	END_IF
+	
+	Local.OKToStop := TRUE;
+	(*Transition Code*)
+	IF pCoolingConveyor^.Framework.ResetDone AND pVibratoryConveyor^.Framework.ResetDone 
+	  AND pVibrator^.Framework.ResetDone  THEN
+		Local.NextState := 9998;
+	END_IF
+	
+	(*On Exit Code*)
+	IF Local.State <> Local.NextState THEN
+		(*Place Holder*)
+	END_IF
+
+9998: (*Reset Done*)
+	IF Local.FirstEntry THEN
+		pCmp^.Framework.FullInitRequired := FALSE;
+		Local.FaultedState := 0;
+		Local.AsynchFault := FALSE;
+		Local.AsynchFaultReactionComplete := FALSE;
+		pCmp^.Framework.ResetDone := TRUE;
+	END_IF
+	
+	Local.OKToStop := TRUE;
+
+9999: (*Manual cycle done*)
+	IF Local.FirstEntry THEN
+		Local.ManualCycleDone := TRUE;
+	END_IF
+		
+END_CASE
+
+(**********************
+  END of Sequence logic
+***********************)
+
+(*Fault Logic*)
+IF Local.tmrFault.Q AND Local.FaultNumber=0 THEN
+	Local.FaultNumber := 1; (*Default fault number is 1*)
+	(*Add custom fault numbers based on state as needed*)
+END_IF
+(*Asynchronous, state-independent faults (e.g., EmergencyStop) are trapped here.*)
+tmrCycleAuto(IN := Local.CycleAuto, PT := T#500MS);
+IF NOT Local.AsynchFault AND tmrCycleAuto.Q THEN
+	IF NOT iWeighRightAutoMode  THEN 
+		Local.FaultNumber := 1;
+		Local.AsynchFault := 1;
+	END_IF
+END_IF
+IF Local.LongFaultState THEN
+	Local.FaultTimePreset := Local.FaultTimeLong;
+ELSE
+	Local.FaultTimePreset := Local.FaultTimeShort;
+END_IF
+Local.LongFaultState := FALSE; 
+
+(*Set Attention bit if needed*)
+Local.Attention := NOT(senBoxPresentInfeed.ON);
+
+(*Manual Logic Nothing Defined for Manual Controls *)
+IF pStation^.OKForManual AND NOT Local.CycleManual AND NOT pStation^.CycleManual THEN
+	IF hiBoxCylExt THEN
+		oBoxCyl_DS_Ret := FALSE;
+		oBoxCyl_US_Ret := FALSE;
+	END_IF
+	IF hiBoxCylRet THEN
+		oBoxCyl_DS_Ret := TRUE;
+		oBoxCyl_US_Ret := TRUE;		
+	END_IF
+	(* Box Conveyor Logic*)
+		oInfeedConv_EntRelease := hiInfeedReleaseEntrance;
+		oInfeedConv_EntRelease := hiInfeedReleaseEntrance;
+		oInfeedConv_Release := hiInfeedReleaseExit;
+		oOutFeedConv_Recieve := hiOutfeedReleaseEntrance;
+		oOutFeedConv_ExitRelease := hiOutfeedReleaseExit;
+
+END_IF
+(* Box Printing HandShakes Take 1*)
+IF hoBoxPrintReq AND hiBoxPrintAck THEN
+	hoBoxPrintReq :=FALSE;
+	hiBoxPrintAck := FALSE;
+END_IF
+(*Reset all manual bits*)
+	hiBoxCylExt :=FALSE;
+	hiBoxCylRet :=FALSE;	
+	hiInfeedBox_Release := FALSE;
+	hiInfeedReleaseEntrance := FALSE;
+	hiInfeedReleaseExit := FALSE;
+	hiOutfeedReleaseEntrance := FALSE;
+	hiOutfeedReleaseExit := FALSE;]]></ST>
+    </Implementation>
+    <Action Name="DefineMessages" Id="{9fc0d55b-9c96-4c1f-9330-7aa9dedbcc27}">
+      <Implementation>
+        <ST><![CDATA[(*Define your Message Structure Here*)
+Local.MsgArray[0].Id := 1;
+Local.MsgArray[0].Text := 'Weigh Right Not In Auto Mode';
+Local.MsgArray[0].AltText := 'No Alt Text';
+Local.MsgArray[1].Id := 601;
+Local.MsgArray[1].Text := 'Weigh Right Not In Auto Mode';
+Local.MsgArray[1].AltText := 'No Alt Text';
+Local.MsgArray[2].Id := 602;
+Local.MsgArray[2].Text := 'Weigh Right Not In Auto Mode';
+Local.MsgArray[2].AltText := 'No Alt Text';
+Local.MsgArray[3].Id := 650;
+Local.MsgArray[3].Text := 'Bax Failed to Arrive at Filling';
+Local.MsgArray[3].AltText := 'No Alt Text';
+Local.MsgArray[4].Id := 2001;
+Local.MsgArray[4].Text := 'B0x Failed to Arrive at Infeed Entrance';
+Local.MsgArray[4].AltText := 'No Alt Text';
+Local.MsgArray[5].Id := 1301;
+Local.MsgArray[5].Text := 'Box Present on Fill Table after release.. Remove and try again';
+Local.MsgArray[5].AltText := 'No Alt Text';]]></ST>
+      </Implementation>
+    </Action>
+    <LineIds Name="Stn100_10_Main">
+      <LineId Id="3085" Count="25" />
+      <LineId Id="3789" Count="0" />
+      <LineId Id="3880" Count="0" />
+      <LineId Id="3801" Count="0" />
+      <LineId Id="3111" Count="8" />
+      <LineId Id="3740" Count="0" />
+      <LineId Id="3120" Count="5" />
+      <LineId Id="3509" Count="0" />
+      <LineId Id="3580" Count="0" />
+      <LineId Id="3582" Count="0" />
+      <LineId Id="3126" Count="0" />
+      <LineId Id="3578" Count="0" />
+      <LineId Id="3585" Count="1" />
+      <LineId Id="3127" Count="8" />
+      <LineId Id="4256" Count="0" />
+      <LineId Id="4255" Count="0" />
+      <LineId Id="3136" Count="56" />
+      <LineId Id="3980" Count="1" />
+      <LineId Id="3984" Count="0" />
+      <LineId Id="3982" Count="1" />
+      <LineId Id="3193" Count="40" />
+      <LineId Id="3235" Count="0" />
+      <LineId Id="3786" Count="0" />
+      <LineId Id="3790" Count="0" />
+      <LineId Id="3237" Count="5" />
+      <LineId Id="3791" Count="2" />
+      <LineId Id="3796" Count="4" />
+      <LineId Id="3794" Count="0" />
+      <LineId Id="3777" Count="0" />
+      <LineId Id="3776" Count="0" />
+      <LineId Id="4242" Count="0" />
+      <LineId Id="3781" Count="0" />
+      <LineId Id="3783" Count="0" />
+      <LineId Id="4068" Count="0" />
+      <LineId Id="3784" Count="0" />
+      <LineId Id="3780" Count="0" />
+      <LineId Id="4157" Count="2" />
+      <LineId Id="3778" Count="0" />
+      <LineId Id="3979" Count="0" />
+      <LineId Id="3779" Count="0" />
+      <LineId Id="3247" Count="1" />
+      <LineId Id="4241" Count="0" />
+      <LineId Id="3249" Count="3" />
+      <LineId Id="3254" Count="6" />
+      <LineId Id="3506" Count="0" />
+      <LineId Id="3263" Count="3" />
+      <LineId Id="4069" Count="0" />
+      <LineId Id="3267" Count="5" />
+      <LineId Id="4252" Count="0" />
+      <LineId Id="3279" Count="0" />
+      <LineId Id="4345" Count="0" />
+      <LineId Id="3281" Count="0" />
+      <LineId Id="4253" Count="0" />
+      <LineId Id="3282" Count="0" />
+      <LineId Id="4249" Count="2" />
+      <LineId Id="4247" Count="1" />
+      <LineId Id="4254" Count="0" />
+      <LineId Id="3283" Count="1" />
+      <LineId Id="4344" Count="0" />
+      <LineId Id="3285" Count="3" />
+      <LineId Id="3290" Count="1" />
+      <LineId Id="4062" Count="0" />
+      <LineId Id="3292" Count="2" />
+      <LineId Id="4257" Count="2" />
+      <LineId Id="4261" Count="0" />
+      <LineId Id="4260" Count="0" />
+      <LineId Id="4262" Count="0" />
+      <LineId Id="3741" Count="1" />
+      <LineId Id="3747" Count="2" />
+      <LineId Id="3743" Count="3" />
+      <LineId Id="3295" Count="9" />
+      <LineId Id="3971" Count="0" />
+      <LineId Id="3976" Count="0" />
+      <LineId Id="3978" Count="0" />
+      <LineId Id="3977" Count="0" />
+      <LineId Id="3958" Count="1" />
+      <LineId Id="4243" Count="0" />
+      <LineId Id="3962" Count="0" />
+      <LineId Id="3964" Count="0" />
+      <LineId Id="3961" Count="0" />
+      <LineId Id="3966" Count="0" />
+      <LineId Id="3973" Count="2" />
+      <LineId Id="3967" Count="0" />
+      <LineId Id="3960" Count="0" />
+      <LineId Id="3313" Count="43" />
+      <LineId Id="4240" Count="0" />
+      <LineId Id="3357" Count="28" />
+      <LineId Id="4066" Count="0" />
+      <LineId Id="4063" Count="1" />
+      <LineId Id="4148" Count="0" />
+      <LineId Id="4065" Count="0" />
+      <LineId Id="3802" Count="0" />
+      <LineId Id="3386" Count="111" />
+      <LineId Id="3659" Count="0" />
+      <LineId Id="3661" Count="0" />
+      <LineId Id="3660" Count="0" />
+      <LineId Id="3662" Count="0" />
+      <LineId Id="3665" Count="0" />
+      <LineId Id="3663" Count="1" />
+      <LineId Id="3759" Count="1" />
+      <LineId Id="3773" Count="0" />
+      <LineId Id="3763" Count="0" />
+      <LineId Id="3766" Count="0" />
+      <LineId Id="3769" Count="1" />
+      <LineId Id="3498" Count="0" />
+      <LineId Id="4152" Count="0" />
+      <LineId Id="3499" Count="0" />
+      <LineId Id="4153" Count="0" />
+      <LineId Id="4156" Count="0" />
+      <LineId Id="4154" Count="0" />
+      <LineId Id="3500" Count="2" />
+      <LineId Id="2" Count="0" />
+      <LineId Id="3756" Count="2" />
+      <LineId Id="3755" Count="0" />
+    </LineIds>
+    <LineIds Name="Stn100_10_Main.DefineMessages">
+      <LineId Id="2" Count="2" />
+      <LineId Id="1" Count="0" />
+      <LineId Id="6" Count="1" />
+      <LineId Id="5" Count="0" />
+      <LineId Id="9" Count="1" />
+      <LineId Id="8" Count="0" />
+      <LineId Id="12" Count="1" />
+      <LineId Id="11" Count="0" />
+      <LineId Id="15" Count="1" />
+      <LineId Id="14" Count="0" />
+      <LineId Id="18" Count="1" />
+      <LineId Id="17" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

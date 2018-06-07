@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <DUT Name="udtYaskawaVFDCmd" Id="{f425c919-2b7b-43e8-8bd4-dfbc96e9589f}">
+    <Declaration><![CDATA[TYPE udtYaskawaVFDCmd :
+STRUCT
+	RunFwd :BOOL;
+	RunRev :BOOL;
+	ClearFaults :BOOL;	
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

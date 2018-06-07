@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <DUT Name="udtCmpVFD" Id="{2aef2b0d-e2e7-41e7-a110-c94f621cf286}">
+    <Declaration><![CDATA[TYPE udtCmpVFD :
+STRUCT
+	Framework: Framework;
+	BaseSpeedRef: REAL;
+	RunReq: BOOL;
+	Running: BOOL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

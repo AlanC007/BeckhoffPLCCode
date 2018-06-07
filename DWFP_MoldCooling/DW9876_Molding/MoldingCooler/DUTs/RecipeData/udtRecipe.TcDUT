@@ -1,0 +1,25 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <DUT Name="udtRecipe" Id="{d4193150-22f6-421a-8bf2-8096513ba753}">
+    <Declaration><![CDATA[TYPE udtRecipe :
+STRUCT
+	Matnr: STRING;
+	Maktx: STRING;
+	Pic_Name: STRING;
+	VisionID: DINT;
+	nBatchID: DINT;
+	QuantityToProduce: DINT;
+	Remaining: DINT;
+	LoadConv_Speed: REAL;
+	HopperElev_Speed: REAL;
+	SeparatorConv_Speed: REAL;
+	PaddleWheel_Speed: REAL;
+	SortingConv_Speed: REAL;
+	Wrapper_Speed: REAL;
+	Wrapper_TempSP: REAL;
+	Wrapper_VacuumSP: REAL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

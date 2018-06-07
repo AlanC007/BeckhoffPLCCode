@@ -1,0 +1,24 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.6">
+  <DUT Name="udtConstantsTransactions" Id="{f47448f8-2bcf-4f38-a03a-a623f18d0f16}">
+    <Declaration><![CDATA[TYPE udtConstantsTransactions :
+STRUCT
+	FindSlot : INT := 1;
+	GetAssignedStation: INT := 2;
+	GetLineStatus : INT := 3;
+	GetOrderData : INT := 4;
+	GetPalletData: INT := 5;
+	GetUnusedPalletID : INT := 6;
+	SetOrderData : INT := 7;
+	SetPalletData : INT := 8;
+	StoreFault : INT := 9;
+	GetAlignerData : INT := 10;
+	DebugGetPartialAID : INT := 11;
+	SetManualAID : INT :=12;
+	DebugLookupAlignerInBatch :INT := 13;
+	DebugAssignDummyAligner :INT := 14;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

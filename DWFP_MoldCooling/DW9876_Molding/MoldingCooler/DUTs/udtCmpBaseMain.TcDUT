@@ -1,0 +1,11 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <DUT Name="udtCmpBaseMain" Id="{24a1ad1d-49a3-4341-8a15-fd2e57370322}">
+    <Declaration><![CDATA[TYPE udtCmpBaseMain :
+STRUCT
+	Framework: Framework;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

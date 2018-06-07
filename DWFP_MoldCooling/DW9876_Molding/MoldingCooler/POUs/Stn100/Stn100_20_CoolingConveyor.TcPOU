@@ -1,0 +1,511 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4022.7">
+  <POU Name="Stn100_20_CoolingConveyor" Id="{d33ba8d6-8fff-4837-af7d-12e522359d34}" SpecialFunc="None">
+    <Declaration><![CDATA[PROGRAM Stn100_20_CoolingConveyor
+VAR CONSTANT
+	cDriveFullSpeedEU: INT := 6000; (*Hz x 100 : 0 to 154 fpm*)
+END_VAR 
+
+VAR PERSISTENT
+	DriveCommand: udtYaskawaVFDCmd;
+	hiSpeedPercentage: REAL; (*5 to 100%*)
+END_VAR
+
+VAR
+	pCmp: POINTER TO udtCmpVFD;
+	pStation: POINTER TO Station;
+	Local: FrameworkLocal;
+	Framework: FB_Framework;
+	
+	DriveStatus: udtYaskawaVFDStatus;		
+	DriveRun: BOOL;	
+	SpeedCmd: REAL;
+	SpeedFbk: REAL;
+	tmrCycleAuto: TON;
+	tmrSpeedChange: TON;
+	tmrDriveStopOffDelay: TON;
+	tmrDriveStart: TON;
+	tmrDriveStop: TON;
+	tmrDriveClearFaults: TON;
+
+	(*Inputs*)
+	iStatus AT %I* : INT;
+	iCurrentVelocity AT %I* : INT;
+	
+	(*Outputs*)
+	oCommand AT %Q* : INT;
+	oSpeedReference AT %Q* : INT;
+	
+	(*Operator Inputs*)
+	hiDriveClearFaults: BOOL;
+	hiDriveRunFwd: BOOL;
+	hiDriveRunRev: BOOL;
+	hiDriveStart: BOOL;
+	hiDriveStop: BOOL;
+END_VAR]]></Declaration>
+    <Implementation>
+      <ST><![CDATA[IF Globals.gFirstScan THEN
+	pCmp := ADR(Globals.gStn100_20_CoolingConveyor);
+	pStation := ADR(Globals.gStation100);
+	(*Address your components here that are owned by this Main*)
+	Local.Name :=pCmp^.Framework.ComponentIDRecord.Name;
+	Local.pStateTraceBuffer := ADR(Globals.gStn100_StateTraceBuffer);
+	Local.pStateTraceFifo := ADR(Globals.gStn100_StateTraceFifo);
+	Local.pStats := ADR(Globals.gStn100_02_Stats);
+	Local.FaultTimeLong := T#10000MS;
+	Local.FaultTimeShort := T#5000MS;
+	
+	DefineMessages();
+END_IF
+
+FrameWork(pFramework := ADR(pCmp^.Framework), 
+		  pLocal := ADR(Local), 
+		  pStation := pStation);
+
+(*House Keeping*)
+DriveStatus.Running := iStatus.0;
+DriveStatus.ZeroSpeed := iStatus.1;
+DriveStatus.RunningFWD := iStatus.2;
+DriveStatus.SpeedAgree := iStatus.4;
+DriveStatus.Ready := iStatus.5;
+DriveStatus.Alarm := iStatus.6;
+DriveStatus.Faulted := iStatus.7;
+DriveStatus.OpError := iStatus.8;
+DriveStatus.PowerLoss := iStatus.9;
+
+oCommand.0 := DriveCommand.RunFwd;
+oCommand.1 := DriveCommand.RunRev;
+oCommand.3 := DriveCommand.ClearFaults;
+
+(*If the station is in auto, set the drive speed to the operator requested percentage of the base speed reference.
+  If the station is in manual, set the drive speed to the operator requested percentage of max speed.*)
+(*NOTE: This conveyor's speed will not change with the base speed reference*)  
+IF Local.CycleAuto THEN
+	SpeedCmd := hiSpeedPercentage;
+ELSIF pStation^.OKForManual THEN
+	SpeedCmd := hiSpeedPercentage;
+END_IF
+
+(*Calculate drive speed command in engineering units from percentage*)
+IF SpeedCmd < 5 THEN
+	SpeedCmd := 5;
+ELSIF SpeedCmd > 100 THEN
+	SpeedCmd := 100;
+END_IF
+oSpeedReference := REAL_TO_INT((SpeedCmd / 100)*cDriveFullSpeedEU);
+
+(*Convert drive speed feedback from engineering units to percentage for display on the HMI*)
+SpeedFbk := (INT_TO_REAL(iCurrentVelocity) / INT_TO_REAL(cDriveFullSpeedEU))*100;
+
+(*Delay Off timer for the drive stop signal.
+  This is required to insure that the drive start signal is not set prior to the drive seeing the drive stop signal go low.*)
+tmrDriveStopOffDelay(IN := NOT DriveCommand.RunFwd, PT := T#100MS);  
+
+(*Start the drive*)
+tmrDriveStart(IN := DriveRun AND tmrDriveStopOffDelay.Q, PT := T#500MS);
+IF DriveRun AND tmrDriveStopOffDelay.Q AND NOT tmrDriveStart.Q THEN
+	DriveCommand.RunFwd := 1;
+END_IF
+
+(*Stop the drive on an emergency stop*)
+IF pStation^.EmergencyStop THEN
+	DriveRun := 0;
+	DriveCommand.RunFwd := 0;
+	DriveCommand.RunRev := 0;	
+END_IF
+
+(*Stop the drive*)
+tmrDriveStop(IN := NOT DriveRun, PT := T#500MS);
+IF NOT DriveRun AND (NOT tmrDriveStop.Q OR (NOT hiDriveRunFwd AND DriveStatus.Running)) THEN
+	DriveCommand.RunFwd := 0;
+	DriveCommand.RunRev := 0;
+END_IF
+
+(**********************
+    Sequence logic
+***********************)
+CASE Local.State OF
+
+0: (*Wait for run request*)
+	Local.OKToStop := TRUE;
+	
+	IF pCmp^.RunReq THEN
+		Local.NextState := 10;
+	END_IF
+
+10: (*Run drive and wait for it to get up to speed*)
+	IF Local.FirstEntry THEN
+		DriveRun := 1;
+	END_IF
+	
+	IF iCurrentVelocity > (oSpeedReference * 0.9) THEN
+		Local.NextState := 20;
+	END_IF
+
+20: (*Run drive while requested*)
+	IF Local.FirstEntry THEN
+		pCmp^.Running := 1;
+	END_IF
+	
+	Local.OKToStop := TRUE;
+	tmrSpeedChange(IN := (iCurrentVelocity < (oSpeedReference * 0.9)) 
+					OR (iCurrentVelocity > (oSpeedReference * 1.1)), PT := T#2000MS);
+	IF NOT pCmp^.RunReq THEN
+		Local.NextState := 30;
+	ELSIF tmrSpeedChange.Q THEN
+		Local.NextState := 21;
+	END_IF
+
+	IF Local.NextState <> Local.State THEN
+		pCmp^.Running := 0;
+	END_IF
+
+21: (*Speed Reference Fault*)
+	Local.FaultNumber := 1;	
+	
+30: (*Stop drive and verify it stopped*)
+	IF Local.FirstEntry THEN
+		DriveRun := 0;
+	END_IF
+
+	IF NOT DriveStatus.Running THEN
+		Local.NextState := 0;
+	END_IF	
+
+(**********************
+    Idle and Reset logic
+***********************)
+5000: (*Idle*)
+	IF Local.FirstEntry THEN
+		DriveRun := 0;
+		DriveCommand.RunFwd := 0;
+		DriveCommand.RunRev := 0;
+		DriveCommand.ClearFaults := 0;
+		pCmp^.Running := 0;
+		Local.ReEntryState := 0;
+		pCmp^.Framework.ResetDone := FALSE;
+		Local.ManualCycleDone := FALSE;
+		hiSpeedPercentage :=15;
+		(*If this component owns components, reset the ResetStart flags here*)
+	END_IF
+	
+	Local.OKToStop := TRUE;
+	IF NOT Local.AsynchFault OR Local.AsynchFaultReactionComplete THEN
+		IF Local.CycleAuto AND NOT Local.CycleReset AND NOT Local.CycleManual THEN
+			Local.NextState := Local.ReEntryState;
+		ELSIF Local.CycleReset AND pCmp^.Framework.ResetStart AND NOT Local.CycleAuto AND NOT Local.CycleManual THEN
+			IF pStation^.FullInitRequired OR pCmp^.Framework.FullInitRequired THEN
+				Local.NextState := 5010;
+			ELSIF NOT pStation^.FullInitRequired AND NOT pCmp^.Framework.FullInitRequired THEN
+				IF NOT Local.AsynchFault THEN
+					Local.NextState := 6000;
+				ELSIF Local.AsynchFault THEN
+					Local.NextState := 7500;
+				END_IF
+			END_IF
+		ELSIF Local.CycleManual AND NOT Local.CycleAuto AND NOT Local.CycleReset THEN
+			Local.NextState := 8000;
+		END_IF
+	ELSIF Local.AsynchFault AND NOT Local.AsynchFaultReactionComplete THEN
+		Local.NextState := 7000;
+	END_IF
+
+5010: (*Full Initialization*)
+	IF Local.FirstEntry THEN
+		DriveRun := 0;
+	END_IF
+	
+	Local.NextState := 5020;
+
+5020: (*Reset drive*)
+	IF Local.FirstEntry THEN
+		DriveCommand.ClearFaults := 1;
+	END_IF
+	
+	IF DriveStatus.Ready AND NOT DriveStatus.Faulted AND NOT DriveStatus.Running THEN
+		Local.NextState := 9000;
+	END_IF
+
+6000: (*Fault Reset - Check faulted state*)
+	Local.NextState := 5010;
+
+7000: (*Asynch Fault Reaction*)
+	Local.NextState := 7499;
+
+7499: (*Asynch fault reaction complete*)
+	IF Local.FirstEntry THEN
+		Local.AsynchFaultReactionComplete := TRUE;
+	END_IF
+	
+	Local.NextState := 5000;
+
+7500: (*Asynch Fault recovery*)
+	Local.NextState := 5010;
+
+8000: (*Manual Cycle Request*)
+	Local.NextState := 9999;
+
+9000: (*Reset*)
+	(*On Entry Code*)
+	IF Local.FirstEntry THEN
+		Local.NextState := 9998;
+	END_IF
+	
+	Local.OKToStop := TRUE;
+	(*Transition Code*)
+	IF TRUE THEN
+		Local.NextState := 9998;
+	END_IF
+	
+	(*On Exit Code*)
+	IF Local.State <> Local.NextState THEN
+		(*Place Holder*)
+	END_IF
+
+9998: (*Reset Done*)
+	IF Local.FirstEntry THEN
+		pCmp^.Framework.FullInitRequired := FALSE;
+		Local.FaultedState := 0;
+		Local.AsynchFault := FALSE;
+		Local.AsynchFaultReactionComplete := FALSE;
+		pCmp^.Framework.ResetDone := TRUE;
+	END_IF
+	
+	Local.OKToStop := TRUE;
+
+9999: (*Manual cycle done*)
+	IF Local.FirstEntry THEN
+		Local.ManualCycleDone := TRUE;
+	END_IF
+		
+END_CASE
+(**********************
+  END of Sequence logic
+***********************)
+
+(*Fault Logic*)
+IF Local.tmrFault.Q AND Local.FaultNumber=0 THEN
+	Local.FaultNumber := 1; (*Default fault number is 1*)
+	(*Add custom fault numbers based on state as needed*)
+END_IF
+(*Asynchronous, state-independent faults (e.g., EmergencyStop) are trapped here.*)
+tmrCycleAuto(IN := Local.CycleAuto, PT := T#5000MS);
+IF NOT Local.AsynchFault AND tmrCycleAuto.Q THEN
+	IF NOT DriveStatus.Ready OR DriveStatus.Faulted THEN
+		Local.FaultNumber := 1;
+		Local.AsynchFault := 1;
+	END_IF
+	IF DriveStatus.RunningFwd THEN
+		Local.FaultNumber := 2;
+		Local.AsynchFault := 1;
+	END_IF
+END_IF
+IF Local.LongFaultState THEN
+	Local.FaultTimePreset := Local.FaultTimeLong;
+ELSE
+	Local.FaultTimePreset := Local.FaultTimeShort;
+END_IF
+Local.LongFaultState := FALSE; 
+
+(*Manual Logic*)
+IF pStation^.OKForManual AND NOT Local.CycleManual AND NOT pStation^.CycleManual THEN
+	IF hiDriveClearFaults THEN
+		DriveCommand.ClearFaults := 1;
+	END_IF
+	IF hiDriveRunFwd THEN
+		DriveCommand.RunFwd := 1;
+		DriveCommand.RunRev := 0;
+	END_IF
+	IF hiDriveRunRev THEN
+		DriveCommand.RunRev := 1;
+		DriveCommand.RunFwd := 0;
+	END_IF	
+  	IF hiDriveStart THEN
+		DriveRun := 1;
+	END_IF
+	IF hiDriveStop THEN
+		DriveRun := 0;
+		DriveCommand.RunFwd := 0;
+		DriveCommand.RunRev := 0;
+		hiDriveRunFwd :=0;
+		hiDriveRunRev :=0;
+	END_IF
+	
+	tmrDriveClearFaults(IN := DriveCommand.ClearFaults, PT := T#1000MS);
+	IF tmrDriveClearFaults.Q THEN
+		DriveCommand.ClearFaults :=0;
+	END_IF
+END_IF
+
+(*Reset all manual bits*)
+hiDriveClearFaults := FALSE;
+(*hiDriveRunFwd := FALSE;
+hiDriveRunRev := FALSE;*)
+hiDriveStart := FALSE;
+hiDriveStop := FALSE;]]></ST>
+    </Implementation>
+    <Action Name="DefineMessages" Id="{8950d124-0c55-4f2d-808a-a2670e3e6c3a}">
+      <Implementation>
+        <ST><![CDATA[(*Define your Message Structure Here*)
+Local.MsgArray[0].Id := 1;
+Local.MsgArray[0].Text := 'Drive faulted';
+Local.MsgArray[0].AltText := 'No Alt Text';
+Local.MsgArray[1].Id := 2;
+Local.MsgArray[1].Text := 'Drive incorrect direction';
+Local.MsgArray[1].AltText := 'No Alt Text';
+Local.MsgArray[2].Id := 101;
+Local.MsgArray[2].Text := 'Drive did not start';
+Local.MsgArray[2].AltText := 'No Alt Text';
+Local.MsgArray[3].Id := 211;
+Local.MsgArray[3].Text := 'Drive not at commanded speed';
+Local.MsgArray[3].AltText := 'No Alt Text';
+Local.MsgArray[4].Id := 301;
+Local.MsgArray[4].Text := 'Drive did not stop';
+Local.MsgArray[4].AltText := 'No Alt Text';
+Local.MsgArray[5].Id := 50201;
+Local.MsgArray[5].Text := 'Drive did not reset';
+Local.MsgArray[5].AltText := 'No Alt Text';]]></ST>
+      </Implementation>
+    </Action>
+    <LineIds Name="Stn100_20_CoolingConveyor">
+      <LineId Id="3" Count="1" />
+      <LineId Id="6" Count="6" />
+      <LineId Id="888" Count="1" />
+      <LineId Id="234" Count="0" />
+      <LineId Id="15" Count="0" />
+      <LineId Id="22" Count="0" />
+      <LineId Id="1128" Count="1" />
+      <LineId Id="1214" Count="0" />
+      <LineId Id="1170" Count="0" />
+      <LineId Id="609" Count="0" />
+      <LineId Id="1300" Count="7" />
+      <LineId Id="697" Count="1" />
+      <LineId Id="700" Count="2" />
+      <LineId Id="811" Count="1" />
+      <LineId Id="1130" Count="0" />
+      <LineId Id="813" Count="1" />
+      <LineId Id="818" Count="1" />
+      <LineId Id="815" Count="0" />
+      <LineId Id="820" Count="3" />
+      <LineId Id="825" Count="1" />
+      <LineId Id="824" Count="0" />
+      <LineId Id="716" Count="0" />
+      <LineId Id="1010" Count="0" />
+      <LineId Id="1008" Count="1" />
+      <LineId Id="827" Count="0" />
+      <LineId Id="830" Count="0" />
+      <LineId Id="839" Count="1" />
+      <LineId Id="844" Count="4" />
+      <LineId Id="850" Count="0" />
+      <LineId Id="852" Count="3" />
+      <LineId Id="1086" Count="0" />
+      <LineId Id="1308" Count="0" />
+      <LineId Id="856" Count="5" />
+      <LineId Id="1309" Count="0" />
+      <LineId Id="863" Count="0" />
+      <LineId Id="831" Count="0" />
+      <LineId Id="31" Count="0" />
+      <LineId Id="619" Count="5" />
+      <LineId Id="867" Count="0" />
+      <LineId Id="865" Count="0" />
+      <LineId Id="626" Count="0" />
+      <LineId Id="866" Count="0" />
+      <LineId Id="627" Count="2" />
+      <LineId Id="869" Count="2" />
+      <LineId Id="868" Count="0" />
+      <LineId Id="630" Count="3" />
+      <LineId Id="872" Count="2" />
+      <LineId Id="876" Count="0" />
+      <LineId Id="634" Count="0" />
+      <LineId Id="925" Count="0" />
+      <LineId Id="1127" Count="0" />
+      <LineId Id="636" Count="2" />
+      <LineId Id="643" Count="3" />
+      <LineId Id="648" Count="3" />
+      <LineId Id="658" Count="0" />
+      <LineId Id="877" Count="8" />
+      <LineId Id="46" Count="0" />
+      <LineId Id="286" Count="0" />
+      <LineId Id="284" Count="1" />
+      <LineId Id="47" Count="0" />
+      <LineId Id="49" Count="0" />
+      <LineId Id="717" Count="0" />
+      <LineId Id="1087" Count="0" />
+      <LineId Id="1311" Count="0" />
+      <LineId Id="927" Count="0" />
+      <LineId Id="1084" Count="1" />
+      <LineId Id="50" Count="2" />
+      <LineId Id="1353" Count="0" />
+      <LineId Id="54" Count="0" />
+      <LineId Id="290" Count="0" />
+      <LineId Id="56" Count="0" />
+      <LineId Id="58" Count="3" />
+      <LineId Id="63" Count="2" />
+      <LineId Id="67" Count="11" />
+      <LineId Id="87" Count="1" />
+      <LineId Id="720" Count="0" />
+      <LineId Id="724" Count="0" />
+      <LineId Id="722" Count="1" />
+      <LineId Id="90" Count="0" />
+      <LineId Id="92" Count="1" />
+      <LineId Id="95" Count="2" />
+      <LineId Id="291" Count="0" />
+      <LineId Id="725" Count="0" />
+      <LineId Id="99" Count="0" />
+      <LineId Id="726" Count="0" />
+      <LineId Id="735" Count="0" />
+      <LineId Id="101" Count="0" />
+      <LineId Id="659" Count="0" />
+      <LineId Id="117" Count="1" />
+      <LineId Id="121" Count="2" />
+      <LineId Id="125" Count="2" />
+      <LineId Id="293" Count="0" />
+      <LineId Id="129" Count="2" />
+      <LineId Id="134" Count="2" />
+      <LineId Id="139" Count="18" />
+      <LineId Id="159" Count="0" />
+      <LineId Id="161" Count="3" />
+      <LineId Id="289" Count="0" />
+      <LineId Id="165" Count="3" />
+      <LineId Id="171" Count="1" />
+      <LineId Id="174" Count="3" />
+      <LineId Id="179" Count="0" />
+      <LineId Id="276" Count="0" />
+      <LineId Id="278" Count="1" />
+      <LineId Id="277" Count="0" />
+      <LineId Id="295" Count="0" />
+      <LineId Id="180" Count="1" />
+      <LineId Id="296" Count="0" />
+      <LineId Id="182" Count="0" />
+      <LineId Id="762" Count="0" />
+      <LineId Id="1257" Count="0" />
+      <LineId Id="763" Count="1" />
+      <LineId Id="766" Count="0" />
+      <LineId Id="768" Count="4" />
+      <LineId Id="767" Count="0" />
+      <LineId Id="775" Count="0" />
+      <LineId Id="183" Count="8" />
+      <LineId Id="678" Count="0" />
+      <LineId Id="747" Count="3" />
+      <LineId Id="752" Count="0" />
+      <LineId Id="751" Count="0" />
+      <LineId Id="753" Count="3" />
+      <LineId Id="737" Count="0" />
+      <LineId Id="679" Count="0" />
+      <LineId Id="681" Count="3" />
+      <LineId Id="1395" Count="3" />
+      <LineId Id="757" Count="0" />
+      <LineId Id="805" Count="0" />
+      <LineId Id="807" Count="2" />
+      <LineId Id="685" Count="2" />
+      <LineId Id="743" Count="3" />
+      <LineId Id="689" Count="0" />
+      <LineId Id="2" Count="0" />
+    </LineIds>
+    <LineIds Name="Stn100_20_CoolingConveyor.DefineMessages">
+      <LineId Id="37" Count="0" />
+      <LineId Id="11" Count="16" />
+      <LineId Id="1" Count="0" />
+    </LineIds>
+  </POU>
+</TcPlcObject>

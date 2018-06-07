@@ -1,0 +1,40 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <Task Name="PlcTask" Id="{dc651210-2b5a-4a51-92ef-38199acb0950}">
+    <!--CycleTime in micro seconds.-->
+    <CycleTime>10000</CycleTime>
+    <Priority>10</Priority>
+    <PouCall>
+      <Name>GlobalConfig</Name>
+    </PouCall>
+    <PouCall>
+      <Name>GlobalLogic</Name>
+    </PouCall>
+    <PouCall>
+      <Name>Stn100_00_ModeControl</Name>
+    </PouCall>
+    <PouCall>
+      <Name>Stn100_01_HMI</Name>
+    </PouCall>
+    <PouCall>
+      <Name>Stn100_02_Stats</Name>
+    </PouCall>
+    <PouCall>
+      <Name>Stn100_10_Main</Name>
+    </PouCall>
+    <PouCall>
+      <Name>Stn100_20_CoolingConveyor</Name>
+    </PouCall>
+    <PouCall>
+      <Name>Stn100_30_VibratoryConveyor</Name>
+    </PouCall>
+    <PouCall>
+      <Name>Stn100_40_Vibrator</Name>
+    </PouCall>
+    <TaskFBGuid>{c678a02e-b7ac-4921-8eeb-76848d521beb}</TaskFBGuid>
+    <Fb_init>{3e7dd6bd-72c0-424f-9661-66a5f9ca1731}</Fb_init>
+    <Fb_exit>{3e111d10-53f6-4aed-8be0-a0c4abf45b76}</Fb_exit>
+    <CycleUpdate>{f1e7dc45-5306-4938-ad70-728cded423ed}</CycleUpdate>
+    <PostCycleUpdate>{fd265252-b02d-4517-ac61-1b4f95b7434c}</PostCycleUpdate>
+  </Task>
+</TcPlcObject>

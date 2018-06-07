@@ -1,0 +1,14 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.12">
+  <DUT Name="udtCmpServo" Id="{946124c0-f5e6-4910-9077-9bee3d9f0f1e}">
+    <Declaration><![CDATA[TYPE udtCmpServo :
+STRUCT
+	Framework: Framework;
+	BaseSpeedRef: REAL;
+	RunReq: BOOL;
+	Running: BOOL;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>

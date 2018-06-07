@@ -1,0 +1,22 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<TcPlcObject Version="1.1.0.1" ProductVersion="3.1.4020.6">
+  <DUT Name="udtIWS_DataLogItems" Id="{5f6d5eea-880b-4c99-a6a7-5aa664d287b2}">
+    <Declaration><![CDATA[TYPE udtIWS_DataLogItems :
+STRUCT
+	HourlyTranReq :BOOL  :=0;
+	HourlyTranCmp :BOOL  :=0;
+	CurrOeeTranReq :BOOL  :=0;
+	CurrOeeTranCmp :BOOL  :=0;
+	ShiftOeeTranReq :BOOL  :=0;
+	ShiftOeeTranCmp :BOOL  :=0;
+	FaultedTranReq :BOOL  :=0;
+	FaultedTranCmp :BOOL  :=0;
+	FailureTranReq :BOOL  :=0;
+	FailureTranCmp :BOOL  :=0;
+	CreateNewBatchReq :BOOL  :=0;
+	CreateNewBatchCmp :BOOL  :=0;
+END_STRUCT
+END_TYPE
+]]></Declaration>
+  </DUT>
+</TcPlcObject>
